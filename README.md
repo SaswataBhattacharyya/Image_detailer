@@ -25,16 +25,35 @@ The pipeline does not rely on one captioning model alone. It coordinates multipl
 ## Quick start
 
 ```bash
-chmod +x scripts/bootstrap_vm.sh scripts/run_image_analyzer.sh scripts/run_streamlit_app.sh scripts/setup_openclaw_supervisor.sh scripts/run_openclaw_supervisor.sh
+chmod +x scripts/*.sh
 ./scripts/bootstrap_vm.sh
-./scripts/run_image_analyzer.sh analyze-image path/to/image.jpg
-```
-
-To run the Streamlit UI on a VM:
-
-```bash
 ./scripts/run_streamlit_app.sh
 ```
+
+This repo is intended to be operated with only two scripts:
+
+- `./scripts/bootstrap_vm.sh`
+  Sets up the full VM environment end to end. It installs system packages, creates the Python virtual environment, installs Python dependencies, installs Ollama, pulls the default models, installs OpenClaw, and ends with the OpenClaw setup checks.
+- `./scripts/run_streamlit_app.sh`
+  Starts the Streamlit UI for the app.
+
+For the normal VM workflow, these are the only two scripts you need.
+
+## Why there are other `.sh` files
+
+Some older helper scripts are still in the repo because the project was originally kept modular:
+
+- `./scripts/run_image_analyzer.sh`
+  Runs the analyzer directly from the terminal without Streamlit. This is optional and is only useful for CLI-only testing or debugging.
+- `./scripts/setup_openclaw_supervisor.sh`
+  Performs standalone setup checks for the separate OpenClaw supervisor path. This is not required for the normal Streamlit workflow because `bootstrap_vm.sh` already handles the main environment setup.
+- `./scripts/run_openclaw_supervisor.sh`
+  Starts a small FastAPI supervisor service used by the older supervisor path. This is not required for normal usage of the app.
+
+So in practice:
+
+- required for normal use: `bootstrap_vm.sh`, `run_streamlit_app.sh`
+- optional helper scripts: everything else in `scripts/`
 
 Defaults:
 
@@ -50,9 +69,15 @@ git init
 
 ## Entry points
 
+- `./scripts/run_streamlit_app.sh`
+- `./scripts/bootstrap_vm.sh`
+
+Optional helper entry points:
+
 - `./scripts/run_image_analyzer.sh analyze-image <image_path>`
 - `./scripts/run_image_analyzer.sh analyze-batch <input_dir>`
-- `./scripts/run_streamlit_app.sh`
+- `./scripts/setup_openclaw_supervisor.sh`
+- `./scripts/run_openclaw_supervisor.sh`
 
 ## Output bundle
 
