@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.venv/
+venv/
+artifacts/*
+!artifacts/.gitkeep
+logs/*
+!logs/.gitkeep
+models/
+*.pyc
+.env
+

@@ -1,0 +1,28 @@
+paths:
+  artifact_dir: artifacts
+  log_dir: logs
+
+pipeline:
+  save_debug_by_default: true
+  dense_caption_first: true
+  enable_ocr: true
+  enable_pose: true
+  enable_face: true
+  enable_segmentation: true
+
+models:
+  ollama_base_url: http://127.0.0.1:11434
+  synthesis_model: qwen2.5vl:7b
+  ollama_timeout_sec: 180
+  ollama_max_loaded_models: 1
+  ollama_num_parallel: 1
+
+providers:
+  detector: yolo
+  region_captioner: florence2
+  pose: mediapipe
+  face: mediapipe
+  segmentation: mediapipe
+  ocr: tesseract
+  color: kmeans
+
