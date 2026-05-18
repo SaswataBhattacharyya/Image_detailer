@@ -10,7 +10,22 @@ fi
 export PYTHONPATH="$ROOT_DIR/src:${PYTHONPATH:-}"
 
 STREAMLIT_HOST="${STREAMLIT_HOST:-0.0.0.0}"
-STREAMLIT_PORT="${STREAMLIT_PORT:-8501}"
+DEFAULT_STREAMLIT_PORT="${STREAMLIT_PORT:-3008}"
+STREAMLIT_PORT="$DEFAULT_STREAMLIT_PORT"
+
+if [[ -t 0 && -z "${STREAMLIT_PORT_PRESET:-}" ]]; then
+  read -r -p "Enter Streamlit port [${DEFAULT_STREAMLIT_PORT}]: " USER_PORT
+  if [[ -n "${USER_PORT}" ]]; then
+    STREAMLIT_PORT="$USER_PORT"
+  fi
+fi
+
+PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+echo "[INFO] Starting Streamlit on ${STREAMLIT_HOST}:${STREAMLIT_PORT}"
+echo "[INFO] Local URL: http://localhost:${STREAMLIT_PORT}"
+if [[ -n "${PRIMARY_IP}" ]]; then
+  echo "[INFO] VM URL: http://${PRIMARY_IP}:${STREAMLIT_PORT}"
+fi
 
 exec python -m streamlit run "$ROOT_DIR/src/image_analyzer/streamlit_app.py" \
   --server.address "$STREAMLIT_HOST" \
