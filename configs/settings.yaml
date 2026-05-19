@@ -12,10 +12,10 @@ pipeline:
 
 models:
   ollama_base_url: http://127.0.0.1:11434
-  synthesis_model: qwen2.5vl:32b
-  analysis_model: qwen2.5vl:32b
+  synthesis_model: qwen2.5vl:7b
+  analysis_model: qwen2.5vl:7b
   structuring_model: qwen2.5-coder:14b
-  comparison_model: qwen2.5vl:32b
+  comparison_model: qwen2.5vl:7b
   ollama_timeout_sec: 180
   ollama_max_loaded_models: 1
   ollama_num_parallel: 1

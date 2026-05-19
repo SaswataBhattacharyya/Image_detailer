@@ -58,17 +58,15 @@ def _render_single_mode(
         return
 
     output_root.mkdir(parents=True, exist_ok=True)
-    with st.spinner("Running unified image recreation flow..."):
-        report = run_image_flow(
-            image_path,
-            load_settings(PROJECT_ROOT),
-            output_root=output_root,
-            project_name=project_name,
-            target_score=target_score,
-            max_full_restarts=max_full_restarts,
-            max_question_rounds=max_question_rounds,
-        )
-    _render_report(report, batch_index=None)
+    _run_streamlit_flow(
+        [image_path],
+        output_root=output_root,
+        project_name=project_name,
+        target_score=target_score,
+        max_full_restarts=max_full_restarts,
+        max_question_rounds=max_question_rounds,
+        batch_mode=False,
+    )
 
 
 def _render_batch_mode(output_root: Path, project_name: str) -> None:
@@ -96,18 +94,15 @@ def _render_batch_mode(output_root: Path, project_name: str) -> None:
         return
 
     output_root.mkdir(parents=True, exist_ok=True)
-    with st.spinner("Running unified batch recreation flow..."):
-        reports = run_batch_flow(
-            image_paths,
-            load_settings(PROJECT_ROOT),
-            output_root=output_root,
-            project_name=project_name,
-        )
-
-    st.success(f"Finished {len(reports)} image runs.")
-    for index, report in enumerate(reports, start=1):
-        with st.expander(f"{index}. {Path(report.reference_image).name} | {round(report.termination.best_score * 100.0, 2)}%", expanded=index == 1):
-            _render_report(report, batch_index=index)
+    _run_streamlit_flow(
+        image_paths,
+        output_root=output_root,
+        project_name=project_name,
+        target_score=None,
+        max_full_restarts=None,
+        max_question_rounds=None,
+        batch_mode=True,
+    )
 
 
 def _resolve_single_input(path_value: str, uploaded_file: object) -> Path | None:
@@ -123,105 +118,117 @@ def _resolve_single_input(path_value: str, uploaded_file: object) -> Path | None
     return target
 
 
-def _render_report(report: RunReport, batch_index: int | None) -> None:
+def _run_streamlit_flow(
+    image_paths: list[Path],
+    *,
+    output_root: Path,
+    project_name: str,
+    target_score: float | None,
+    max_full_restarts: int | None,
+    max_question_rounds: int | None,
+    batch_mode: bool,
+) -> None:
     import streamlit as st
 
-    if batch_index is None:
-        st.subheader("Current Run")
+    config = load_settings(PROJECT_ROOT)
+
+    left_col, right_col = st.columns([1.1, 1.4])
+    progress_bar = st.progress(0.0)
+    batch_status = st.empty()
+    image_slot = left_col.empty()
+    generated_slot = left_col.empty()
+    latest_event_slot = left_col.empty()
+    similarity_slot = right_col.empty()
+    event_log_slot = right_col.empty()
+    result_slot = right_col.empty()
+
+    collected_events: list[dict[str, object]] = []
+    reports: list[RunReport] = []
+
+    def on_event(event: dict[str, object]) -> None:
+        collected_events.append(event)
+        latest_event_slot.info(f"{event['stage']} [{event['status']}] {event['message']}")
+        event_lines = [
+            f"{item['timestamp']} | {item['stage']} | {item['status']} | {item['message']}"
+            for item in collected_events[-30:]
+        ]
+        event_log_slot.code("\n".join(event_lines), language="text")
+        payload = event.get("payload", {}) if isinstance(event.get("payload"), dict) else {}
+        if "output_image" in payload and payload["output_image"]:
+            candidate = Path(str(payload["output_image"]))
+            if candidate.exists():
+                generated_slot.image(str(candidate), caption="Generated image", use_container_width=True)
+        if "similarity" in payload:
+            similarity_slot.metric("Similarity", f"{round(float(payload['similarity']) * 100.0, 2)}%")
+
+    total = len(image_paths)
+    for index, image_path in enumerate(image_paths, start=1):
+        batch_status.write(f"Processing {index}/{total}: `{image_path.name}`")
+        image_slot.image(str(image_path), caption=image_path.name, use_container_width=True)
+        generated_slot.empty()
+        similarity_slot.empty()
+        collected_events.clear()
+        report = run_image_flow(
+            image_path,
+            config,
+            output_root=output_root,
+            project_name=project_name,
+            target_score=target_score,
+            max_full_restarts=max_full_restarts,
+            max_question_rounds=max_question_rounds,
+            event_callback=on_event,
+        )
+        reports.append(report)
+        progress_bar.progress(index / total)
+        result_slot.empty()
+        _render_result(result_slot.container(), report)
+
+    if batch_mode:
+        st.success(f"Finished batch recreation flow for {len(reports)} images.")
+    else:
+        st.success("Finished image recreation flow.")
+
+
+def _render_result(container, report: RunReport) -> None:
+    import streamlit as st
 
     score_percent = round(report.termination.best_score * 100.0, 2)
-    restart_count = len(report.iterations)
-    left, right = st.columns([1.0, 1.1])
-    run_dir = Path(report.run_dir)
-    model_calls_path = run_dir / "logs" / "model_calls.jsonl"
-    gap_history_path = run_dir / "logs" / "gap_history.json"
-    latest_hybrid = report.iterations[-1].hybrid_score if report.iterations else None
+    container.subheader("Current Result")
+    container.write(f"Run directory: `{report.run_dir}`")
+    container.write(f"Similarity: **{score_percent}%**")
+    container.write(f"Termination: `{report.termination.reason}`")
+    container.write(report.prompt_package.final_prompt)
 
-    with left:
-        st.image(report.reference_image, caption="Reference image", use_container_width=True)
-        if report.generation.output_image and Path(report.generation.output_image).exists():
-            st.image(report.generation.output_image, caption="Generated image", use_container_width=True)
-        else:
-            st.info("No generated image was produced for this run.")
-
-    with right:
-        metric_a, metric_b, metric_c = st.columns(3)
-        metric_a.metric("Similarity", f"{score_percent}%")
-        metric_b.metric("Restarts", str(restart_count))
-        metric_c.metric("Status", report.termination.reason if report.termination else "unknown")
-        st.write(f"Run directory: `{report.run_dir}`")
-        st.write(f"Termination: `{report.termination.reason}`")
-        st.subheader("Logs")
-        if report.passes:
-            pass_lines = []
-            for item in report.passes:
-                preview = (item.raw_response or "").strip().replace("\n", " ")
-                pass_lines.append(f"{item.pass_key} | {preview[:220]}")
-            st.code("\n\n".join(pass_lines), language="text")
-        else:
-            st.info("No pass logs were recorded.")
-
-        if report.warnings:
-            st.warning("\n".join(report.warnings))
-
-        st.subheader("Current Result")
-        st.write(f"Similarity result: **{score_percent}%**")
-        if latest_hybrid is not None:
-            st.caption(
-                f"Perceptual similarity: {round(latest_hybrid.perceptual.perceptual_similarity_score * 100.0, 2)}%"
-            )
-        st.write(report.prompt_package.final_prompt)
-
-    tab_prompt, tab_memory, tab_questions, tab_logs, tab_similarity, tab_json = st.tabs(
-        ["Prompt", "Scene Memory", "Question Loop", "Run Logs", "Similarity", "Structured Output"]
-    )
-    with tab_prompt:
-        st.code(report.prompt_package.generator_prompt, language="text")
-        st.caption("Negative prompt")
-        st.code(report.prompt_package.negative_prompt, language="text")
-        if report.visual_hierarchy.must_avoid:
-            st.caption("Critical constraints")
-            st.write("\n".join(f"- {item}" for item in report.visual_hierarchy.must_match + report.visual_hierarchy.must_avoid))
-    with tab_memory:
-        if report.final_scene_memory is not None:
-            st.json(report.final_scene_memory.model_dump(mode="json"))
-        else:
-            st.info("No final scene memory recorded.")
-    with tab_questions:
-        if report.question_history:
-            for item in report.question_history:
-                with st.expander(f"Round {item.iteration}: {item.topic}", expanded=False):
-                    st.write(f"Question: {item.question}")
-                    st.write(item.answer)
-        else:
-            st.info("No follow-up questions were recorded.")
-    with tab_logs:
-        if model_calls_path.exists():
-            st.caption("Model calls")
-            st.code(model_calls_path.read_text(encoding="utf-8"), language="json")
-        else:
-            st.info("No model call log file found.")
-        if report.passes:
-            st.caption("Pass responses")
-            for item in report.passes:
-                with st.expander(item.title, expanded=item.pass_key == "overview"):
-                    st.caption(item.prompt)
-                    st.code(item.raw_response or "(empty response)", language="text")
-                    if item.warnings:
-                        st.warning("\n".join(item.warnings))
-        if gap_history_path.exists():
-            st.caption("Gap history")
-            st.code(gap_history_path.read_text(encoding="utf-8"), language="json")
-    with tab_similarity:
-        st.write(f"Final similarity: **{score_percent}%**")
-        if report.comparison is not None:
-            st.json(report.comparison.model_dump(mode="json"))
-        if latest_hybrid is not None:
-            st.json(latest_hybrid.model_dump(mode="json"))
-        else:
-            st.info("No similarity artifact was recorded.")
-    with tab_json:
-        st.json(report.model_dump(mode="json"))
+    text_tab, json_tab, loop_tab = container.tabs(["Text Outputs", "JSON Outputs", "Loop Details"])
+    with text_tab:
+        container_map = {
+            "Detailed recreation text": report.prompt_package.final_prompt,
+            "Concise generation prompt": report.prompt_package.generator_prompt,
+            "Negative prompt": report.prompt_package.negative_prompt,
+            "Critical constraints": "\n".join(report.visual_hierarchy.must_match + report.visual_hierarchy.must_avoid),
+        }
+        for title, value in container_map.items():
+            with st.expander(title, expanded=title == "Detailed recreation text"):
+                st.write(value)
+    with json_tab:
+        st.json(
+            {
+                "scene_memory": report.final_scene_memory.model_dump(mode="json") if report.final_scene_memory else None,
+                "scene_map": report.scene_map.model_dump(mode="json"),
+                "prompt_package": report.prompt_package.model_dump(mode="json"),
+                "comparison": report.comparison.model_dump(mode="json") if report.comparison else None,
+                "termination": report.termination.model_dump(mode="json") if report.termination else None,
+            }
+        )
+    with loop_tab:
+        st.json(
+            {
+                "question_history": [item.model_dump(mode="json") for item in report.question_history],
+                "gap_history": [[gap.model_dump(mode="json") for gap in items] for items in report.gap_history],
+                "iterations": [item.model_dump(mode="json") for item in report.iterations],
+                "warnings": report.warnings,
+            }
+        )
 
 
 if __name__ == "__main__":

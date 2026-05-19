@@ -24,13 +24,13 @@ Auxiliary modules like YOLO, Florence, OCR, and color extraction are supporting 
 
 `./scripts/bootstrap_vm.sh` currently pulls these Ollama models:
 
-- `qwen2.5vl:32b`
+- `qwen2.5vl:7b`
 - `qwen2.5-coder:14b`
 - `gemma4:latest`
 
 Repo defaults:
 
-- image interrogation model: `qwen2.5vl:32b`
+- image interrogation model: `qwen2.5vl:7b`
 - structuring model: `qwen2.5-coder:14b`
 - supervisor/default reasoning model: `qwen2.5-coder:14b`
 

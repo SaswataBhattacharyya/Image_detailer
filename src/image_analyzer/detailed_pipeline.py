@@ -7,7 +7,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from shutil import copy2
-from typing import Any
+from typing import Any, Callable
 
 from image_analyzer.config.settings import AppConfig
 from image_analyzer.models.schemas import (
@@ -52,6 +52,7 @@ def run_image_flow(
     target_score: float | None = None,
     max_full_restarts: int | None = None,
     max_question_rounds: int | None = None,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> RunReport:
     image_path = image_path.resolve()
     timestamp = datetime.now(timezone.utc)
@@ -88,6 +89,7 @@ def run_image_flow(
         created_at=timestamp,
     )
     dump_json(paths["logs"] / "run_config.json", run_config.model_dump(mode="json"))
+    _emit_event(event_callback, stage="setup", status="running", message="Created run folder and copied reference image.", payload={"run_dir": str(run_dir), "reference_image": str(copied_reference)})
 
     configure_ollama_runtime(
         max_loaded_models=config.models.ollama_max_loaded_models,
@@ -97,6 +99,7 @@ def run_image_flow(
     support_signals, aux_warnings = _collect_support_signals(image_path)
     warnings: list[str] = list(aux_warnings)
     model_calls: list[dict[str, Any]] = []
+    _emit_event(event_callback, stage="auxiliary", status="completed", message="Collected auxiliary support signals.", payload={"warnings": aux_warnings, "support_signals": support_signals})
 
     vlm_client = OllamaSynthesisProvider(
         base_url=config.models.ollama_base_url,
@@ -126,6 +129,7 @@ def run_image_flow(
         warnings=warnings,
     )
     passes.append(initial_pass)
+    _emit_event(event_callback, stage="overview", status="completed", message="Completed broad VLM overview.", payload={"response": initial_pass.raw_response, "warnings": initial_pass.warnings})
     current_memory = _build_initial_scene_memory(initial_pass, support_signals, aspect_ratio)
     scene_memories.append(current_memory)
     dump_json(paths["memory"] / "scene_memory_v1.json", current_memory.model_dump(mode="json"))
@@ -133,6 +137,7 @@ def run_image_flow(
     for round_index in range(1, max_rounds + 1):
         gaps = _identify_gaps(current_memory)
         gap_history.append(gaps)
+        _emit_event(event_callback, stage="gap_detection", status="completed", message=f"Identified {len(gaps)} high-priority gaps.", payload={"round": round_index, "gaps": [gap.model_dump(mode='json') for gap in gaps]})
         dump_json(
             paths["passes"] / f"pass_{round_index * 2:02d}_gaps.json",
             [gap.model_dump(mode="json") for gap in gaps],
@@ -140,12 +145,14 @@ def run_image_flow(
         if not gaps:
             break
         next_gap = gaps[0]
+        _emit_event(event_callback, stage="question_planning", status="running", message=f"Planning focused question for {next_gap.topic}.", payload={"round": round_index, "topic": next_gap.topic})
         question_prompt = _build_next_question_prompt(current_memory, next_gap)
         question_artifact = vlm_client.analyze_visual_pass(image_path, question_prompt)
         warnings.extend(question_artifact.warnings)
         model_calls.append({"phase": "focused_question", "round": round_index, "topic": next_gap.topic, "warnings": question_artifact.warnings})
         question_text = _extract_question(question_artifact.data.get("content", ""), next_gap)
         dump_text(paths["passes"] / f"pass_{round_index * 2 + 1:02d}_next_question.txt", question_text + "\n")
+        _emit_event(event_callback, stage="question_planning", status="completed", message=f"Generated focused question for {next_gap.topic}.", payload={"round": round_index, "question": question_text})
 
         answer_prompt = _build_focused_extraction_prompt(next_gap.topic, question_text)
         answer_artifact = vlm_client.analyze_visual_pass(image_path, answer_prompt)
@@ -153,6 +160,7 @@ def run_image_flow(
         warnings.extend(answer_artifact.warnings)
         model_calls.append({"phase": "question_answer", "round": round_index, "topic": next_gap.topic, "warnings": answer_artifact.warnings})
         dump_text(paths["passes"] / f"pass_{round_index * 2 + 2:02d}_answer.txt", answer_text + "\n")
+        _emit_event(event_callback, stage="question_answer", status="completed", message=f"Captured focused answer for {next_gap.topic}.", payload={"round": round_index, "topic": next_gap.topic, "answer": answer_text, "warnings": answer_artifact.warnings})
 
         question_history.append(
             QuestionRecord(
@@ -165,6 +173,7 @@ def run_image_flow(
         current_memory = _update_scene_memory(current_memory, next_gap, answer_text, round_index + 1)
         scene_memories.append(current_memory)
         dump_json(paths["memory"] / f"scene_memory_v{round_index + 1}.json", current_memory.model_dump(mode="json"))
+        _emit_event(event_callback, stage="memory_update", status="completed", message=f"Updated scene memory to version {round_index + 1}.", payload={"round": round_index, "scene_memory": current_memory.model_dump(mode="json")})
         if len(current_memory.high_priority_gaps) == 0 and len(current_memory.uncertain) <= 2:
             break
 
@@ -175,6 +184,7 @@ def run_image_flow(
     model_calls.append({"phase": "scene_map_refiner", "warnings": refined_artifact.warnings})
     refined_scene_map = _refine_scene_map(refined_scene_map, refined_artifact.data.get("json"))
     dump_json(paths["outputs"] / "structured_scene_map.json", refined_scene_map.model_dump(mode="json"))
+    _emit_event(event_callback, stage="scene_map", status="completed", message="Built and refined structured scene map.", payload={"scene_map": refined_scene_map.model_dump(mode="json"), "warnings": refined_artifact.warnings})
 
     visual_hierarchy = _build_visual_hierarchy(refined_scene_map)
     prompt_package = _build_prompt_package(refined_scene_map, visual_hierarchy)
@@ -184,6 +194,7 @@ def run_image_flow(
     dump_json(paths["memory"] / "final_scene_memory.json", current_memory.model_dump(mode="json"))
     dump_json(paths["logs"] / "question_history.json", [item.model_dump(mode="json") for item in question_history])
     dump_json(paths["logs"] / "gap_history.json", [[gap.model_dump(mode="json") for gap in items] for items in gap_history])
+    _emit_event(event_callback, stage="prompt_synthesis", status="completed", message="Prepared final recreation prompt and text outputs.", payload={"final_prompt": prompt_package.final_prompt, "generator_prompt": prompt_package.generator_prompt})
 
     generation_config = GenerationConfig(
         backend=config.generation.backend,
@@ -203,6 +214,7 @@ def run_image_flow(
     for restart_index in range(1, max_restarts + 1):
         iter_prompt = _prompt_for_restart(prompt_package, restart_index)
         _write_prompt_files(paths["outputs"], iter_prompt, restart_index)
+        _emit_event(event_callback, stage="generation", status="running", message=f"Starting generation attempt {restart_index}.", payload={"attempt": restart_index, "prompt": iter_prompt.generator_prompt})
         generation = _generate_image_iteration(
             iteration=restart_index,
             paths=paths,
@@ -210,6 +222,7 @@ def run_image_flow(
             generation_config=generation_config,
             enabled=True,
         )
+        _emit_event(event_callback, stage="generation", status="completed" if generation.output_image else "warning", message=generation.message, payload={"attempt": restart_index, "output_image": generation.output_image, "status": generation.status})
         comparison = None
         hybrid = None
         correction = None
@@ -238,6 +251,7 @@ def run_image_flow(
             )
             dump_json(paths["comparisons"] / f"comparison_v{restart_index}.json", comparison.model_dump(mode="json"))
             dump_json(paths["comparisons"] / f"similarity_v{restart_index}.json", hybrid.model_dump(mode="json"))
+            _emit_event(event_callback, stage="similarity", status="completed", message=f"Similarity for attempt {restart_index}: {round(code_score * 100.0, 2)}%.", payload={"attempt": restart_index, "similarity": code_score, "comparison": comparison.model_dump(mode="json"), "hybrid_score": hybrid.model_dump(mode="json")})
         loop_result = IterationResult(
             iteration=restart_index,
             prompt_package=iter_prompt,
@@ -253,7 +267,9 @@ def run_image_flow(
             best_score = score
             best_result = loop_result
         if loop_result.accepted:
+            _emit_event(event_callback, stage="loop_control", status="completed", message=f"Accepted attempt {restart_index} with similarity {round(score * 100.0, 2)}%.", payload={"attempt": restart_index, "similarity": score, "accepted": True})
             break
+        _emit_event(event_callback, stage="loop_control", status="warning", message=f"Similarity below threshold on attempt {restart_index}; restarting full process logic.", payload={"attempt": restart_index, "similarity": score, "accepted": False})
 
     termination = _build_termination(loop_results, target_similarity, best_score)
     final_result = best_result or IterationResult(
@@ -284,6 +300,7 @@ def run_image_flow(
     dump_json(paths["reports"] / "run_report.json", report.model_dump(mode="json"))
     dump_text(paths["reports"] / "final_report.md", _build_final_report(report))
     dump_text(paths["logs"] / "model_calls.jsonl", "\n".join(json.dumps(item) for item in model_calls) + ("\n" if model_calls else ""))
+    _emit_event(event_callback, stage="run_complete", status="completed", message="Unified image recreation flow completed.", payload={"run_dir": str(run_dir), "termination": report.termination.model_dump(mode="json"), "generated_image": report.generation.output_image})
     return report
 
 
@@ -293,9 +310,10 @@ def run_batch_flow(
     *,
     output_root: Path | None = None,
     project_name: str | None = None,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[RunReport]:
     return [
-        run_image_flow(path, config, output_root=output_root, project_name=project_name)
+        run_image_flow(path, config, output_root=output_root, project_name=project_name, event_callback=event_callback)
         for path in image_paths
     ]
 
@@ -321,6 +339,27 @@ def run_detailed_pipeline(
         project_name=project_name,
         target_score=target_score,
         max_full_restarts=max_iterations,
+    )
+
+
+def _emit_event(
+    callback: Callable[[dict[str, Any]], None] | None,
+    *,
+    stage: str,
+    status: str,
+    message: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    if callback is None:
+        return
+    callback(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
+            "status": status,
+            "message": message,
+            "payload": payload or {},
+        }
     )
 
 

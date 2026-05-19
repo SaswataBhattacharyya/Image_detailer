@@ -3,7 +3,7 @@
 Runtime defaults:
 
 - Ollama at `http://127.0.0.1:11434`
-- VLM: `qwen2.5vl:32b`
+- VLM: `qwen2.5vl:7b`
 - structuring model: `qwen2.5-coder:14b`
 - reasoning/default supervisor model: `qwen2.5-coder:14b`
 - one loaded model at a time
