@@ -49,7 +49,7 @@ image-analyzer analyze-detailed /path/to/image.png
 - installs Ollama if missing
 - ensures Ollama is reachable
 - pulls default Ollama models:
-  - `qwen2.5-vl:32b`
+  - `qwen2.5vl:32b`
   - `qwen2.5-coder:14b`
   - `gemma4:latest`
 - installs OpenClaw if missing
@@ -213,7 +213,7 @@ OpenClaw should treat this repo as the main execution engine:
 Check:
 
 - `ollama` is reachable at `http://127.0.0.1:11434`
-- `qwen2.5-vl:32b` is pulled and fits on your GPU
+- `qwen2.5vl:32b` is pulled and fits on your GPU
 - the generator backend is configured
 - `IMAGE_ANALYZER_QWEN_IMAGE_RUNNER` is set if generation is enabled
 - your runner actually writes the expected output image

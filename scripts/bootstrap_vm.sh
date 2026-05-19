@@ -130,7 +130,7 @@ main() {
   ensure_venv
   install_ollama_if_missing
   ensure_ollama_running
-  pull_model_if_missing "qwen2.5-vl:32b"
+  pull_model_if_missing "qwen2.5vl:32b"
   pull_model_if_missing "gemma4:latest"
   pull_model_if_missing "qwen2.5-coder:14b"
   install_openclaw_if_missing

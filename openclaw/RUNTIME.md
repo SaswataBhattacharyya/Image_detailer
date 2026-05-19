@@ -6,7 +6,7 @@ Runtime defaults:
 - one loaded model at a time
 - one parallel request by default
 - Linux + NVIDIA GPU primary target
-- advanced VLM model: `qwen2.5-vl:32b`
+- advanced VLM model: `qwen2.5vl:32b`
 - structuring model: `qwen2.5-coder:14b`
 
 If the GPU is not visible, stop and report the missing host-level prerequisites instead of silently falling back.
