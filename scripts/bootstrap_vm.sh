@@ -117,6 +117,12 @@ install_openclaw_if_missing() {
   curl -fsSL https://openclaw.ai/install.sh | bash
 }
 
+setup_qwen_image_backend() {
+  if [[ -x "$ROOT_DIR/scripts/setup_qwen_image_backend.sh" ]]; then
+    "$ROOT_DIR/scripts/setup_qwen_image_backend.sh"
+  fi
+}
+
 main() {
   configure_privilege_mode
   ensure_base_packages
@@ -124,12 +130,14 @@ main() {
   ensure_venv
   install_ollama_if_missing
   ensure_ollama_running
-  pull_model_if_missing "qwen2.5vl:7b"
+  pull_model_if_missing "qwen2.5-vl:32b"
   pull_model_if_missing "gemma4:latest"
   pull_model_if_missing "qwen2.5-coder:14b"
   install_openclaw_if_missing
+  setup_qwen_image_backend
   chmod +x "$ROOT_DIR"/scripts/*.sh
   log "[INFO] CLI entrypoint: ./scripts/run_image_analyzer.sh"
+  log "[INFO] Detailed closed-loop entrypoint: image-analyzer analyze-detailed <image_path>"
   log "[INFO] Streamlit UI entrypoint: ./scripts/run_streamlit_app.sh"
   log "[INFO] Bootstrap complete."
 }

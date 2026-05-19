@@ -27,9 +27,40 @@ class PipelineConfig:
 class ModelConfig:
     ollama_base_url: str
     synthesis_model: str
+    analysis_model: str
+    structuring_model: str
+    comparison_model: str
     ollama_timeout_sec: int
     ollama_max_loaded_models: int
     ollama_num_parallel: int
+
+
+@dataclass(frozen=True)
+class DetailedPipelineConfig:
+    run_root_dir: Path
+    default_project_name: str
+    default_iterations: int
+    default_aspect_ratio: str
+    enable_generation_by_default: bool
+    enable_comparison_by_default: bool
+    target_score: float
+    max_iterations: int
+    scene_weight: float
+    perceptual_weight: float
+    visual_passes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GenerationBackendConfig:
+    backend: str
+    width: int
+    height: int
+    steps: int
+    cfg: float
+    sampler: str
+    seed: int
+    model: str
+    command_template: str
 
 
 @dataclass(frozen=True)
@@ -49,6 +80,8 @@ class AppConfig:
     paths: PathConfig
     pipeline: PipelineConfig
     models: ModelConfig
+    detailed: DetailedPipelineConfig
+    generation: GenerationBackendConfig
     providers: ProviderConfig
 
 
@@ -71,9 +104,36 @@ def load_settings(project_root: Path) -> AppConfig:
         models=ModelConfig(
             ollama_base_url=str(payload["models"]["ollama_base_url"]),
             synthesis_model=str(payload["models"]["synthesis_model"]),
+            analysis_model=str(payload["models"].get("analysis_model", payload["models"]["synthesis_model"])),
+            structuring_model=str(payload["models"].get("structuring_model", payload["models"]["synthesis_model"])),
+            comparison_model=str(payload["models"].get("comparison_model", payload["models"]["synthesis_model"])),
             ollama_timeout_sec=int(payload["models"]["ollama_timeout_sec"]),
             ollama_max_loaded_models=int(payload["models"]["ollama_max_loaded_models"]),
             ollama_num_parallel=int(payload["models"]["ollama_num_parallel"]),
+        ),
+        detailed=DetailedPipelineConfig(
+            run_root_dir=project_root / payload["detailed"]["run_root_dir"],
+            default_project_name=str(payload["detailed"]["default_project_name"]),
+            default_iterations=int(payload["detailed"]["default_iterations"]),
+            default_aspect_ratio=str(payload["detailed"]["default_aspect_ratio"]),
+            enable_generation_by_default=bool(payload["detailed"]["enable_generation_by_default"]),
+            enable_comparison_by_default=bool(payload["detailed"]["enable_comparison_by_default"]),
+            target_score=float(payload["detailed"].get("target_score", 0.95)),
+            max_iterations=int(payload["detailed"].get("max_iterations", 5)),
+            scene_weight=float(payload["detailed"].get("scene_weight", 0.65)),
+            perceptual_weight=float(payload["detailed"].get("perceptual_weight", 0.35)),
+            visual_passes=tuple(str(item) for item in payload["detailed"]["visual_passes"]),
+        ),
+        generation=GenerationBackendConfig(
+            backend=str(payload["generation"]["backend"]),
+            width=int(payload["generation"]["width"]),
+            height=int(payload["generation"]["height"]),
+            steps=int(payload["generation"]["steps"]),
+            cfg=float(payload["generation"]["cfg"]),
+            sampler=str(payload["generation"]["sampler"]),
+            seed=int(payload["generation"]["seed"]),
+            model=str(payload["generation"]["model"]),
+            command_template=str(payload["generation"].get("command_template", "")),
         ),
         providers=ProviderConfig(
             detector=str(payload["providers"]["detector"]),
@@ -89,4 +149,3 @@ def load_settings(project_root: Path) -> AppConfig:
 
 def _read_yaml(path: Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
-

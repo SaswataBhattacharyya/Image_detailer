@@ -1,13 +1,26 @@
 # Knowledge
 
-The analyzer combines specialist modules:
+The repo combines specialist modules:
 
 - object detection
-- region captioning
+- multi-pass VLM image analysis
 - OCR
 - color extraction
 - optional pose / face / segmentation
-- Ollama synthesis
+- prompt package generation
+- optional local image generation
+- VLM image comparison
+- hybrid similarity scoring
 
-The final JSON should preserve which module produced each field and how confident it was.
+Important artifact classes:
 
+- scene map JSON
+- visual hierarchy JSON
+- prompt package JSON/text
+- generation metadata
+- comparison report JSON
+- hybrid score JSON
+- final run report
+
+The final outputs should preserve which module or phase produced each field and
+how confident it was.
