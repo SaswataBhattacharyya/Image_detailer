@@ -137,7 +137,8 @@ main() {
   setup_qwen_image_backend
   chmod +x "$ROOT_DIR"/scripts/*.sh
   log "[INFO] CLI entrypoint: ./scripts/run_image_analyzer.sh"
-  log "[INFO] Detailed closed-loop entrypoint: image-analyzer analyze-detailed <image_path>"
+  log "[INFO] Unified image flow entrypoint: image-analyzer analyze-image <image_path>"
+  log "[INFO] Unified batch flow entrypoint: image-analyzer analyze-batch <input_dir>"
   log "[INFO] Streamlit UI entrypoint: ./scripts/run_streamlit_app.sh"
   log "[INFO] Bootstrap complete."
 }

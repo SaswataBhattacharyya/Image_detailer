@@ -1,27 +1,38 @@
 # image_analyzer
 
-Local-first image analysis and closed-loop image recreation pipeline.
+Local-first image recreation agent driven by a VLM interrogation loop.
 
-This repo now supports two distinct modes:
+## Core flow
 
-- `analyze-image`: legacy measured-first image analysis with JSON/text/layered outputs
-- `analyze-detailed`: advanced multi-pass VLM analysis that can run a closed loop:
-  `analyze -> scene map -> prompt package -> generate -> compare -> correct -> repeat`
+There is one canonical flow for both single images and batches:
 
-## What the repo does now
+1. Read the reference image.
+2. Run a broad VLM overview.
+3. Build scene memory.
+4. Detect the most important missing visual detail.
+5. Ask the next focused VLM question.
+6. Repeat until the image is reconstruction-ready.
+7. Build the final recreation text, concise prompt, and constraints.
+8. Generate an image.
+9. Compute a code-based similarity percentage.
+10. If similarity is below `80%`, restart the full process.
+11. Stop when similarity is at least `80%` or the restart limit is reached.
 
-The advanced path is built around:
+Auxiliary modules like YOLO, Florence, OCR, and color extraction are supporting signals only. They do not control the flow.
 
-- multi-pass image-grounded VLM analysis
-- structured scene-map JSON generation
-- visual hierarchy and prompt package generation
-- optional local image generation through a stable wrapper script
-- hybrid similarity scoring:
-  - semantic/VLM comparison
-  - code-based perceptual scoring
-- iterative prompt correction until threshold or max iterations
+## Models pulled by bootstrap
 
-The simple path still exists for lightweight image analysis and Streamlit usage.
+`./scripts/bootstrap_vm.sh` currently pulls these Ollama models:
+
+- `qwen2.5vl:32b`
+- `qwen2.5-coder:14b`
+- `gemma4:latest`
+
+Repo defaults:
+
+- image interrogation model: `qwen2.5vl:32b`
+- structuring model: `qwen2.5-coder:14b`
+- supervisor/default reasoning model: `gemma4:latest`
 
 ## Quick start
 
@@ -31,190 +42,125 @@ chmod +x scripts/*.sh
 ./scripts/run_streamlit_app.sh
 ```
 
-The Streamlit UI is still useful for the legacy/simple analyzer path.
-
-For the advanced closed-loop path, use the CLI:
+CLI:
 
 ```bash
-image-analyzer analyze-detailed /path/to/image.png
+image-analyzer analyze-image /path/to/image.png
+image-analyzer analyze-batch /path/to/folder
 ```
 
-## Current setup behavior
+## Bootstrap behavior
 
-`./scripts/bootstrap_vm.sh` does the following:
+`./scripts/bootstrap_vm.sh`:
 
-- installs base system packages
-- creates the Python virtual environment
+- installs system packages
+- creates `.venv`
 - installs the repo in editable mode
 - installs Ollama if missing
-- ensures Ollama is reachable
-- pulls default Ollama models:
-  - `qwen2.5vl:32b`
-  - `qwen2.5-coder:14b`
-  - `gemma4:latest`
+- starts Ollama if needed
+- pulls the default Ollama models listed above
 - installs OpenClaw if missing
-- runs the Qwen-image backend setup helper
+- runs the Qwen image backend setup helper
 
-Important:
+## Unified CLI
 
-- the **closed-loop engine is implemented**
-- but actual image generation still depends on a local backend runner command
-- `bootstrap_vm.sh` will warn you if that backend is not configured
-
-## Qwen-image backend setup
-
-The repo uses this stable wrapper for generation:
+Single image:
 
 ```bash
-./scripts/run_qwen_image_generation.sh
+image-analyzer analyze-image /path/to/image.png \
+  --target-score 0.80 \
+  --max-full-restarts 3 \
+  --max-question-rounds 6
 ```
 
-The closed-loop pipeline calls that wrapper by default through the config.
-
-You must provide the real backend in one of these ways:
-
-1. Configure a setup/install command before bootstrap:
+Batch:
 
 ```bash
-export IMAGE_ANALYZER_QWEN_IMAGE_SETUP_COMMAND='...your install command...'
-./scripts/bootstrap_vm.sh
+image-analyzer analyze-batch /path/to/folder
 ```
 
-2. Configure the runtime generation command:
+`analyze-detailed` still exists as a compatibility alias, but it uses the same engine and is no longer the primary documented path.
 
-```bash
-export IMAGE_ANALYZER_QWEN_IMAGE_RUNNER='...your qwen-image generation command...'
-```
+## Streamlit
 
-When invoked, the wrapper exposes these environment variables to your command:
+The Streamlit app uses the same unified flow.
 
-- `IMAGE_ANALYZER_QWEN_IMAGE_PROMPT_FILE`
-- `IMAGE_ANALYZER_QWEN_IMAGE_NEGATIVE_PROMPT_FILE`
-- `IMAGE_ANALYZER_QWEN_IMAGE_OUTPUT_IMAGE`
-- `IMAGE_ANALYZER_QWEN_IMAGE_WIDTH`
-- `IMAGE_ANALYZER_QWEN_IMAGE_HEIGHT`
-- `IMAGE_ANALYZER_QWEN_IMAGE_STEPS`
-- `IMAGE_ANALYZER_QWEN_IMAGE_CFG`
-- `IMAGE_ANALYZER_QWEN_IMAGE_SAMPLER`
-- `IMAGE_ANALYZER_QWEN_IMAGE_SEED`
-- `IMAGE_ANALYZER_QWEN_IMAGE_MODEL`
+For each image it shows:
 
-If you prefer, you can replace the wrapper with a repo-local direct implementation.
+- reference image
+- generated image
+- similarity percentage
+- restart count
+- final prompt
+- scene memory
+- question loop history
+- structured JSON outputs
 
-## Advanced CLI
+## Run artifacts
 
-Basic detailed run:
-
-```bash
-image-analyzer analyze-detailed /path/to/image.png
-```
-
-Closed-loop run:
-
-```bash
-image-analyzer analyze-detailed /path/to/image.png \
-  --enable-generation \
-  --enable-comparison \
-  --target-score 0.95 \
-  --max-iterations 5
-```
-
-Useful flags:
-
-- `--output-dir`
-- `--project-name`
-- `--iterations`
-- `--aspect-ratio`
-- `--enable-generation`
-- `--enable-comparison`
-- `--target-score`
-- `--max-iterations`
-
-## Output layout
-
-Legacy/simple runs still write under `artifacts/<image_stem>/`.
-
-Detailed closed-loop runs write timestamped run folders under:
+Unified runs write timestamped folders under:
 
 ```text
 artifacts/detailed_runs/<timestamp>_<project>_<image>/
 ```
 
-Each run folder contains:
+Each run contains:
 
 ```text
 input/
-analysis/
-prompts/
+memory/
+passes/
+outputs/
 generated/
 comparisons/
 reports/
 logs/
 ```
 
-Typical advanced outputs include:
+Important files:
 
-- `analysis/02_structured_scene_map.json`
-- `analysis/03_refined_scene_map.json`
-- `analysis/04_visual_hierarchy.json`
-- `prompts/final_prompt.txt`
-- `reports/final_prompt_package.json`
-- `reports/run_report.json`
-- `logs/model_calls.jsonl`
-
-When generation/comparison are enabled, you also get iteration artifacts like:
-
+- `memory/final_scene_memory.json`
+- `outputs/structured_scene_map.json`
+- `outputs/detailed_recreation_text.txt`
+- `outputs/concise_generation_prompt.txt`
+- `outputs/critical_constraints.txt`
 - `generated/generated_v1.png`
-- `comparisons/comparison_v1.json`
-- `comparisons/correction_v1.json`
-- `comparisons/hybrid_score_v1.json`
-
-## Streamlit
-
-The Streamlit app still reflects the simple analyzer path.
-
-It is **not** yet the primary interface for:
-
-- closed-loop generation
-- iteration control
-- hybrid similarity scoring
-- prompt correction rounds
-
-Use the CLI for the advanced workflow.
+- `comparisons/similarity_v1.json`
+- `reports/run_report.json`
 
 ## OpenClaw
 
-Repo-local OpenClaw instructions live under `openclaw/`.
+OpenClaw is expected to supervise this repo using the instructions under `openclaw/`.
 
-OpenClaw should treat this repo as the main execution engine:
+Its main job is:
 
-- OpenClaw can start detailed runs
-- OpenClaw can inspect run artifacts
-- OpenClaw should not own the closed-loop logic itself
+- interrogate the image with the VLM
+- decide what detail is still missing
+- ask the next focused question
+- stop only when the image is recreation-ready
 
-## Setup policy
+It should not treat one caption as sufficient.
 
-- Linux + NVIDIA GPU is the primary target
-- one heavy model on GPU at a time is the intended runtime policy
-- host GPU drivers are validated but not auto-installed
-- Ollama is configured for one loaded model at a time by default
+## Generator backend
+
+Image generation is routed through:
+
+```bash
+./scripts/run_qwen_image_generation.sh
+```
+
+The wrapper expects a real backend command through:
+
+- `IMAGE_ANALYZER_QWEN_IMAGE_RUNNER`
+
+If that backend is missing, generation will fail clearly.
 
 ## Entry points
 
 - `./scripts/bootstrap_vm.sh`
 - `./scripts/run_streamlit_app.sh`
 - `./scripts/run_image_analyzer.sh analyze-image <image_path>`
-- `image-analyzer analyze-detailed <image_path>`
+- `image-analyzer analyze-image <image_path>`
+- `image-analyzer analyze-batch <input_dir>`
 - `./scripts/setup_openclaw_supervisor.sh`
 - `./scripts/run_openclaw_supervisor.sh`
-
-## If advanced runs fail
-
-Check:
-
-- `ollama` is reachable at `http://127.0.0.1:11434`
-- `qwen2.5vl:32b` is pulled and fits on your GPU
-- the generator backend is configured
-- `IMAGE_ANALYZER_QWEN_IMAGE_RUNNER` is set if generation is enabled
-- your runner actually writes the expected output image
-- the VM firewall/security group exposes the Streamlit port if you are using the UI

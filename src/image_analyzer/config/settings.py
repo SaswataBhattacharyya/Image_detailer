@@ -39,12 +39,11 @@ class ModelConfig:
 class DetailedPipelineConfig:
     run_root_dir: Path
     default_project_name: str
-    default_iterations: int
     default_aspect_ratio: str
     enable_generation_by_default: bool
-    enable_comparison_by_default: bool
     target_score: float
-    max_iterations: int
+    max_full_restarts: int
+    max_question_rounds: int
     scene_weight: float
     perceptual_weight: float
     visual_passes: tuple[str, ...]
@@ -114,12 +113,11 @@ def load_settings(project_root: Path) -> AppConfig:
         detailed=DetailedPipelineConfig(
             run_root_dir=project_root / payload["detailed"]["run_root_dir"],
             default_project_name=str(payload["detailed"]["default_project_name"]),
-            default_iterations=int(payload["detailed"]["default_iterations"]),
             default_aspect_ratio=str(payload["detailed"]["default_aspect_ratio"]),
             enable_generation_by_default=bool(payload["detailed"]["enable_generation_by_default"]),
-            enable_comparison_by_default=bool(payload["detailed"]["enable_comparison_by_default"]),
             target_score=float(payload["detailed"].get("target_score", 0.95)),
-            max_iterations=int(payload["detailed"].get("max_iterations", 5)),
+            max_full_restarts=int(payload["detailed"].get("max_full_restarts", 3)),
+            max_question_rounds=int(payload["detailed"].get("max_question_rounds", 6)),
             scene_weight=float(payload["detailed"].get("scene_weight", 0.65)),
             perceptual_weight=float(payload["detailed"].get("perceptual_weight", 0.35)),
             visual_passes=tuple(str(item) for item in payload["detailed"]["visual_passes"]),

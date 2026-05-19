@@ -5,8 +5,7 @@ from pathlib import Path
 
 from image_analyzer.cli.batch import resolve_batch_inputs
 from image_analyzer.config.settings import load_settings
-from image_analyzer.detailed_pipeline import run_detailed_pipeline
-from image_analyzer.pipeline import analyze_batch, analyze_image
+from image_analyzer.detailed_pipeline import run_batch_flow, run_image_flow
 
 
 def main() -> None:
@@ -16,56 +15,58 @@ def main() -> None:
     image_parser = subparsers.add_parser("analyze-image")
     image_parser.add_argument("image_path")
     image_parser.add_argument("--output-dir", default=None)
-    image_parser.add_argument("--no-debug", action="store_true")
-
-    detailed_parser = subparsers.add_parser("analyze-detailed")
-    detailed_parser.add_argument("image_path")
-    detailed_parser.add_argument("--output-dir", default=None)
-    detailed_parser.add_argument("--project-name", default=None)
-    detailed_parser.add_argument("--iterations", type=int, default=None)
-    detailed_parser.add_argument("--aspect-ratio", default=None)
-    detailed_parser.add_argument("--enable-generation", action="store_true")
-    detailed_parser.add_argument("--enable-comparison", action="store_true")
-    detailed_parser.add_argument("--target-score", type=float, default=None)
-    detailed_parser.add_argument("--max-iterations", type=int, default=None)
+    image_parser.add_argument("--project-name", default=None)
+    image_parser.add_argument("--target-score", type=float, default=None)
+    image_parser.add_argument("--max-full-restarts", type=int, default=None)
+    image_parser.add_argument("--max-question-rounds", type=int, default=None)
 
     batch_parser = subparsers.add_parser("analyze-batch")
     batch_parser.add_argument("input_dir")
     batch_parser.add_argument("--output-dir", default=None)
-    batch_parser.add_argument("--no-debug", action="store_true")
+    batch_parser.add_argument("--project-name", default=None)
+
+    # Compatibility alias for older docs and scripts. This uses the same unified engine.
+    detailed_parser = subparsers.add_parser("analyze-detailed")
+    detailed_parser.add_argument("image_path")
+    detailed_parser.add_argument("--output-dir", default=None)
+    detailed_parser.add_argument("--project-name", default=None)
+    detailed_parser.add_argument("--target-score", type=float, default=None)
+    detailed_parser.add_argument("--max-full-restarts", type=int, default=None)
+    detailed_parser.add_argument("--max-question-rounds", type=int, default=None)
 
     args = parser.parse_args()
     project_root = Path(__file__).resolve().parents[3]
     config = load_settings(project_root)
     output_dir = Path(args.output_dir).resolve() if args.output_dir else None
-    save_debug = not getattr(args, "no_debug", False)
 
-    if args.command == "analyze-image":
-        result = analyze_image(Path(args.image_path), config, output_root=output_dir, save_debug=save_debug)
-        print(result.summary.long_description)
-        return
-
-    if args.command == "analyze-detailed":
-        report = run_detailed_pipeline(
+    if args.command in {"analyze-image", "analyze-detailed"}:
+        report = run_image_flow(
             Path(args.image_path),
             config,
             output_root=output_dir,
             project_name=args.project_name,
-            iterations=args.iterations,
-            aspect_ratio=args.aspect_ratio,
-            enable_generation=args.enable_generation,
-            enable_comparison=args.enable_comparison,
             target_score=args.target_score,
-            max_iterations=args.max_iterations,
+            max_full_restarts=args.max_full_restarts,
+            max_question_rounds=args.max_question_rounds,
         )
-        print(f"Detailed run directory: {report.run_dir}")
+        print(f"Run directory: {report.run_dir}")
+        print(f"Similarity: {round(report.termination.best_score * 100.0, 2)}%")
+        if report.generation.output_image:
+            print(f"Generated image: {report.generation.output_image}")
         print(report.prompt_package.final_prompt)
         return
 
     input_dir = Path(args.input_dir)
     image_paths = resolve_batch_inputs(input_dir)
-    results = analyze_batch(image_paths, config, output_root=output_dir, save_debug=save_debug)
-    print(f"Analyzed {len(results)} images.")
+    reports = run_batch_flow(
+        image_paths,
+        config,
+        output_root=output_dir,
+        project_name=args.project_name,
+    )
+    print(f"Processed {len(reports)} images.")
+    for report in reports:
+        print(f"{Path(report.reference_image).name}: {round(report.termination.best_score * 100.0, 2)}% -> {report.run_dir}")
 
 
 if __name__ == "__main__":

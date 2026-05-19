@@ -1,26 +1,26 @@
 # Knowledge
 
-The repo combines specialist modules:
+Main reasoning path:
 
-- object detection
-- multi-pass VLM image analysis
-- OCR
-- color extraction
-- optional pose / face / segmentation
-- prompt package generation
-- optional local image generation
-- VLM image comparison
-- hybrid similarity scoring
+- VLM overview
+- gap detection
+- focused follow-up questioning
+- scene memory refinement
+- final prompt synthesis
 
-Important artifact classes:
+Auxiliary evidence:
 
-- scene map JSON
-- visual hierarchy JSON
-- prompt package JSON/text
-- generation metadata
-- comparison report JSON
-- hybrid score JSON
-- final run report
+- YOLO detections
+- Florence captions
+- OCR text
+- dominant color extraction
 
-The final outputs should preserve which module or phase produced each field and
-how confident it was.
+Important outputs:
+
+- `memory/final_scene_memory.json`
+- `outputs/structured_scene_map.json`
+- `outputs/detailed_recreation_text.txt`
+- `outputs/concise_generation_prompt.txt`
+- `outputs/critical_constraints.txt`
+- `comparisons/similarity_v*.json`
+- `reports/run_report.json`

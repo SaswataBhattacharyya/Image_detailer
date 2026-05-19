@@ -219,6 +219,31 @@ class ScenePassResult(SchemaModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class GapRecord(SchemaModel):
+    topic: str
+    reason: str
+    priority: int
+
+
+class QuestionRecord(SchemaModel):
+    iteration: int
+    question: str
+    answer: str
+    topic: str
+
+
+class SceneMemory(SchemaModel):
+    version: int
+    scene_type: str
+    composition: dict[str, Any] = Field(default_factory=dict)
+    major_elements: list[str] = Field(default_factory=list)
+    known: list[str] = Field(default_factory=list)
+    uncertain: list[str] = Field(default_factory=list)
+    contradictions: list[str] = Field(default_factory=list)
+    high_priority_gaps: list[GapRecord] = Field(default_factory=list)
+    scene_map: dict[str, Any] = Field(default_factory=dict)
+
+
 class PromptPackage(SchemaModel):
     base_prompt: str
     precision_prompt: str
@@ -316,9 +341,12 @@ class RunReport(SchemaModel):
     run_dir: str
     reference_image: str
     scene_map: SceneMap
+    final_scene_memory: SceneMemory | None = None
     visual_hierarchy: VisualHierarchy
     prompt_package: PromptPackage
     passes: list[ScenePassResult] = Field(default_factory=list)
+    question_history: list[QuestionRecord] = Field(default_factory=list)
+    gap_history: list[list[GapRecord]] = Field(default_factory=list)
     generation: GenerationResult
     comparison: ComparisonReport | None = None
     correction: PromptCorrection | None = None

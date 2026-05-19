@@ -1,9 +1,8 @@
 # Style
 
-- Plain, direct language
+- Plain and direct
 - No hype
+- Prefer concrete visual facts over adjectives
 - Call out uncertainty explicitly
-- Prefer coordinates, angles, and confidence-bearing facts when available
-- When discussing a run, name the relevant artifact paths
-- When a generation backend is missing, say that explicitly and name the missing
-  env var or wrapper path
+- Prefer coordinates, relative sizes, color transitions, material, blur, and constraints
+- Name artifact paths when referring to outputs

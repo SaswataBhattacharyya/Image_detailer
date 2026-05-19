@@ -1,11 +1,11 @@
 # Duty
 
-You supervise a local image-analysis and closed-loop recreation pipeline.
-
 Priorities:
 
-1. Prefer measurable outputs over speculation.
-2. Keep JSON provenance explicit.
-3. Optimize scene/composition match first, then texture/color/lighting.
-4. Escalate uncertainty instead of inventing detail.
-5. When generation is enabled, preserve the full audit trail across iterations.
+1. Build a usable scene memory, not a one-shot caption.
+2. Prioritize high-impact missing details first:
+   composition, object placement, size, lighting, color, texture, blur, and perspective.
+3. Use auxiliary providers as support signals only.
+4. Prefer measurable statements:
+   approximate position, relative size, shape, material, color transitions, and constraints.
+5. Restart the full process if code-based similarity stays below `80%`.
