@@ -32,7 +32,7 @@ Repo defaults:
 
 - image interrogation model: `qwen2.5vl:32b`
 - structuring model: `qwen2.5-coder:14b`
-- supervisor/default reasoning model: `gemma4:latest`
+- supervisor/default reasoning model: `qwen2.5-coder:14b`
 
 ## Quick start
 
@@ -61,6 +61,12 @@ image-analyzer analyze-batch /path/to/folder
 - pulls the default Ollama models listed above
 - installs OpenClaw if missing
 - runs the Qwen image backend setup helper
+
+Runtime guardrails:
+
+- repo-side Ollama calls enforce one active model at a time
+- provider keep-alive is shortened so heavy models do not linger on GPU unnecessarily
+- if Ollama returns a model-load/resource-limit error, the repo unloads competing models and retries once
 
 ## Unified CLI
 

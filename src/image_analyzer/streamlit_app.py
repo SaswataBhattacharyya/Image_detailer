@@ -132,6 +132,10 @@ def _render_report(report: RunReport, batch_index: int | None) -> None:
     score_percent = round(report.termination.best_score * 100.0, 2)
     restart_count = len(report.iterations)
     left, right = st.columns([1.0, 1.1])
+    run_dir = Path(report.run_dir)
+    model_calls_path = run_dir / "logs" / "model_calls.jsonl"
+    gap_history_path = run_dir / "logs" / "gap_history.json"
+    latest_hybrid = report.iterations[-1].hybrid_score if report.iterations else None
 
     with left:
         st.image(report.reference_image, caption="Reference image", use_container_width=True)
@@ -141,14 +145,35 @@ def _render_report(report: RunReport, batch_index: int | None) -> None:
             st.info("No generated image was produced for this run.")
 
     with right:
-        st.metric("Similarity", f"{score_percent}%")
-        st.metric("Restarts used", str(restart_count))
+        metric_a, metric_b, metric_c = st.columns(3)
+        metric_a.metric("Similarity", f"{score_percent}%")
+        metric_b.metric("Restarts", str(restart_count))
+        metric_c.metric("Status", report.termination.reason if report.termination else "unknown")
         st.write(f"Run directory: `{report.run_dir}`")
         st.write(f"Termination: `{report.termination.reason}`")
+        st.subheader("Logs")
+        if report.passes:
+            pass_lines = []
+            for item in report.passes:
+                preview = (item.raw_response or "").strip().replace("\n", " ")
+                pass_lines.append(f"{item.pass_key} | {preview[:220]}")
+            st.code("\n\n".join(pass_lines), language="text")
+        else:
+            st.info("No pass logs were recorded.")
+
+        if report.warnings:
+            st.warning("\n".join(report.warnings))
+
+        st.subheader("Current Result")
+        st.write(f"Similarity result: **{score_percent}%**")
+        if latest_hybrid is not None:
+            st.caption(
+                f"Perceptual similarity: {round(latest_hybrid.perceptual.perceptual_similarity_score * 100.0, 2)}%"
+            )
         st.write(report.prompt_package.final_prompt)
 
-    tab_prompt, tab_memory, tab_questions, tab_similarity, tab_json = st.tabs(
-        ["Prompt", "Scene Memory", "Question Loop", "Similarity", "Structured Output"]
+    tab_prompt, tab_memory, tab_questions, tab_logs, tab_similarity, tab_json = st.tabs(
+        ["Prompt", "Scene Memory", "Question Loop", "Run Logs", "Similarity", "Structured Output"]
     )
     with tab_prompt:
         st.code(report.prompt_package.generator_prompt, language="text")
@@ -170,11 +195,29 @@ def _render_report(report: RunReport, batch_index: int | None) -> None:
                     st.write(item.answer)
         else:
             st.info("No follow-up questions were recorded.")
+    with tab_logs:
+        if model_calls_path.exists():
+            st.caption("Model calls")
+            st.code(model_calls_path.read_text(encoding="utf-8"), language="json")
+        else:
+            st.info("No model call log file found.")
+        if report.passes:
+            st.caption("Pass responses")
+            for item in report.passes:
+                with st.expander(item.title, expanded=item.pass_key == "overview"):
+                    st.caption(item.prompt)
+                    st.code(item.raw_response or "(empty response)", language="text")
+                    if item.warnings:
+                        st.warning("\n".join(item.warnings))
+        if gap_history_path.exists():
+            st.caption("Gap history")
+            st.code(gap_history_path.read_text(encoding="utf-8"), language="json")
     with tab_similarity:
+        st.write(f"Final similarity: **{score_percent}%**")
         if report.comparison is not None:
             st.json(report.comparison.model_dump(mode="json"))
-        if report.iterations and report.iterations[-1].hybrid_score is not None:
-            st.json(report.iterations[-1].hybrid_score.model_dump(mode="json"))
+        if latest_hybrid is not None:
+            st.json(latest_hybrid.model_dump(mode="json"))
         else:
             st.info("No similarity artifact was recorded.")
     with tab_json:
