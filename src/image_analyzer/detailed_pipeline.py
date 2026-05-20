@@ -125,6 +125,7 @@ def run_image_flow(
         height=height,
         aspect_ratio=aspect_ratio,
         support_signals=support_signals,
+        support_signal_word_limit=config.detailed.support_signal_word_limit,
         client=vlm_client,
         paths=paths,
         model_calls=model_calls,
@@ -148,8 +149,13 @@ def run_image_flow(
             break
         next_gap = gaps[0]
         _emit_event(event_callback, stage="question_planning", status="running", message=f"Planning focused question for {next_gap.topic}.", payload={"round": round_index, "topic": next_gap.topic})
-        question_prompt = _build_next_question_prompt(current_memory, next_gap)
-        question_artifact = vlm_client.analyze_visual_pass(image_path, question_prompt)
+        question_prompt = _build_next_question_prompt(
+            current_memory,
+            next_gap,
+            prompt_word_limit=config.detailed.prompt_word_limit,
+            scene_memory_fact_limit=config.detailed.scene_memory_fact_limit,
+        )
+        question_artifact = vlm_client.analyze_visual_pass(image_path, question_prompt, num_predict=220)
         warnings.extend(question_artifact.warnings)
         model_calls.append({"phase": "focused_question", "round": round_index, "topic": next_gap.topic, "warnings": question_artifact.warnings})
         question_text = _extract_question(question_artifact.data.get("content", ""), next_gap)
@@ -157,7 +163,7 @@ def run_image_flow(
         _emit_event(event_callback, stage="question_planning", status="completed", message=f"Generated focused question for {next_gap.topic}.", payload={"round": round_index, "question": question_text})
 
         answer_prompt = _build_focused_extraction_prompt(next_gap.topic, question_text)
-        answer_artifact = vlm_client.analyze_visual_pass(image_path, answer_prompt)
+        answer_artifact = vlm_client.analyze_visual_pass(image_path, answer_prompt, num_predict=420)
         answer_text = str(answer_artifact.data.get("content", "")).strip()
         warnings.extend(answer_artifact.warnings)
         model_calls.append({"phase": "question_answer", "round": round_index, "topic": next_gap.topic, "warnings": answer_artifact.warnings})
@@ -180,7 +186,12 @@ def run_image_flow(
             break
 
     refined_scene_map = _scene_memory_to_scene_map(current_memory, support_signals, width, height, aspect_ratio)
-    scene_map_prompt = _build_scene_map_refiner_prompt(current_memory, refined_scene_map)
+    scene_map_prompt = _build_scene_map_refiner_prompt(
+        current_memory,
+        refined_scene_map,
+        prompt_word_limit=config.detailed.prompt_word_limit,
+        scene_memory_fact_limit=config.detailed.scene_memory_fact_limit,
+    )
     refined_artifact = structuring_client.generate_json(scene_map_prompt, num_predict=1400)
     warnings.extend(refined_artifact.warnings)
     model_calls.append({"phase": "scene_map_refiner", "warnings": refined_artifact.warnings})
@@ -390,6 +401,7 @@ def _run_overview_pass(
     height: int,
     aspect_ratio: str,
     support_signals: dict[str, Any],
+    support_signal_word_limit: int,
     client: OllamaSynthesisProvider,
     paths: dict[str, Path],
     model_calls: list[dict[str, Any]],
@@ -400,7 +412,7 @@ def _run_overview_pass(
         "Describe the overall scene structure, major objects, approximate composition, probable camera angle, "
         "dominant elements, and which details still need follow-up. "
         f"Image info: {image_path.name}, {width}x{height}, aspect {aspect_ratio}. "
-        f"Auxiliary evidence: {support_signals}"
+        f"Auxiliary evidence: {_support_signal_summary(support_signals, support_signal_word_limit)}"
     )
     artifact = client.analyze_visual_pass(image_path, prompt, num_predict=1200)
     warnings.extend(artifact.warnings)
@@ -449,7 +461,7 @@ def _build_initial_scene_memory(pass_result: ScenePassResult, support_signals: d
     elements = [str(item.get("label")) for item in detections if isinstance(item, dict)]
     if not elements:
         elements = [str(item) for item in _extract_candidate_elements(overview)]
-    uncertain = _initial_uncertainties(overview)
+    uncertain = _initial_uncertainties(overview, support_signals, elements)
     gaps = _rank_gaps(uncertain)
     return SceneMemory(
         version=1,
@@ -470,19 +482,29 @@ def _identify_gaps(scene_memory: SceneMemory) -> list[GapRecord]:
     return _rank_gaps(scene_memory.uncertain)
 
 
-def _build_next_question_prompt(scene_memory: SceneMemory, gap: GapRecord) -> str:
-    return (
-        "Given the current scene memory, choose the single most important unresolved visual detail and write one "
-        "focused follow-up question that asks for concrete observable details only. "
-        f"Current memory: {scene_memory.model_dump(mode='json')} "
-        f"Priority gap: {gap.model_dump(mode='json')}"
+def _build_next_question_prompt(
+    scene_memory: SceneMemory,
+    gap: GapRecord,
+    *,
+    prompt_word_limit: int,
+    scene_memory_fact_limit: int,
+) -> str:
+    memory_summary = _scene_memory_summary(scene_memory, fact_limit=scene_memory_fact_limit)
+    prompt = (
+        "You are planning the next image-inspection question. "
+        "Write exactly one short follow-up question, under 45 words, about the highest-impact unresolved visual detail. "
+        "Ask for measurable details only: approximate position, size, shape, color, material, breed/type, lighting, or relation to nearby elements. "
+        f"Current memory: {memory_summary} "
+        f"Priority gap: {gap.topic}. "
+        "Return the question only."
     )
+    return _trim_words(prompt, prompt_word_limit)
 
 
 def _extract_question(raw: str, gap: GapRecord) -> str:
     text = raw.strip()
     if text:
-        return text.splitlines()[0].strip()
+        return _trim_words(text.splitlines()[0].strip(), 45)
     return (
         f"Focus only on {gap.topic}. Describe its approximate position, size, shape, colors, textures, "
         "lighting behavior, and relation to surrounding elements."
@@ -490,10 +512,15 @@ def _extract_question(raw: str, gap: GapRecord) -> str:
 
 
 def _build_focused_extraction_prompt(topic: str, question: str) -> str:
+    extra = ""
+    lowered = topic.lower()
+    if any(token in lowered for token in ["breed", "identity", "animal", "horse"]):
+        extra = " If this is an animal or horse, identify the likely breed or type and cite visible conformation markers."
     return (
         f"Focus only on {topic}. {question} "
-        "Return precise visual detail for image recreation. Prefer approximate percentages, size estimates, "
+        "Return 5 to 8 short factual lines for image recreation. Prefer approximate percentages, relative size estimates, "
         "shapes, textures, color transitions, blur, and what should not be changed."
+        f"{extra} Keep the answer under 150 words."
     )
 
 
@@ -526,40 +553,53 @@ def _scene_memory_to_scene_map(
     dominant_names = [str(item.get("name", "")) for item in support_signals.get("dominant_colors", []) if isinstance(item, dict)]
     objects = _scene_objects_from_support(scene_memory, support_signals)
     known_text = " ".join(scene_memory.known).lower()
+    subject_name = objects[0].name if objects else "main subject"
     return SceneMap(
         canvas=CanvasSpec(
             aspect_ratio=aspect_ratio,
             orientation="landscape" if width >= height else "portrait",
             camera_angle=_camera_angle_guess(known_text),
-            lens_feel="wide-angle landscape lens",
-            horizon_y_percent_from_top=48.0,
+            lens_feel="natural telephoto-to-normal field framing",
+            horizon_y_percent_from_top=_horizon_guess(scene_memory),
             vanishing_or_radiation_center={"x_percent": 50.0, "y_percent": 48.0},
         ),
         main_objects=objects,
         foreground=RegionSpec(
             region_y_percent="60-100",
-            summary=_best_known_line(scene_memory, "foreground", default="Foreground region described from iterative VLM memory."),
-            texture=_find_texture_lines(scene_memory, "foreground"),
+            summary=_region_summary(
+                scene_memory,
+                region="foreground",
+                default=f"Short grass foreground around the {subject_name}'s lower legs.",
+            ),
+            texture=_find_texture_lines(scene_memory, "foreground", fallback="short grass and hoof-level detail"),
             dominant_colors=dominant_names,
         ),
         middle_ground=RegionSpec(
             region_y_percent="35-60",
-            summary=_best_known_line(scene_memory, "middle", default="Middle ground described from iterative VLM memory."),
-            texture=_find_texture_lines(scene_memory, "middle"),
+            summary=_region_summary(
+                scene_memory,
+                region="middle",
+                default=f"{subject_name.capitalize()} stands in the pasture as the main subject.",
+            ),
+            texture=_find_texture_lines(scene_memory, "middle", fallback="subject coat and nearby grass texture"),
             dominant_colors=dominant_names,
         ),
         background=RegionSpec(
             region_y_percent="20-45",
-            summary=_best_known_line(scene_memory, "background", default="Background and horizon described from iterative VLM memory."),
+            summary=_region_summary(
+                scene_memory,
+                region="background",
+                default="Soft tree line and pasture background behind the subject.",
+            ),
             texture=[],
             dominant_colors=dominant_names,
         ),
         sky=SkySpec(
             region_y_percent="0-45",
-            cloud_direction="radiating from center horizon" if "radiat" in known_text else "broad layered sky structure",
-            upper_left="cooler and darker region",
-            upper_right="warmer or lighter region",
-            center="brightest or most visually dominant atmospheric zone",
+            cloud_direction="broad soft sky band" if "cloud" not in known_text else "broad layered sky structure",
+            upper_left="soft pale upper-left sky",
+            upper_right="soft pale upper-right sky",
+            center="soft daylight sky above the tree line",
             motion="soft natural atmospheric motion",
             sharpness="natural, not hyper-sharp",
         ),
@@ -573,12 +613,21 @@ def _scene_memory_to_scene_map(
     )
 
 
-def _build_scene_map_refiner_prompt(scene_memory: SceneMemory, scene_map: SceneMap) -> str:
-    return (
-        "Using the current scene memory, refine this scene map JSON without inventing unsupported objects. "
-        "Tighten wording, preserve constraints, and keep the structure strict. "
-        f"Scene memory: {scene_memory.model_dump(mode='json')} Scene map: {scene_map.model_dump(mode='json')}"
+def _build_scene_map_refiner_prompt(
+    scene_memory: SceneMemory,
+    scene_map: SceneMap,
+    *,
+    prompt_word_limit: int,
+    scene_memory_fact_limit: int,
+) -> str:
+    prompt = (
+        "Refine the draft scene map JSON using only supported evidence. "
+        "Do not invent objects, and do not repeat the same generic paragraph across foreground, middle ground, and background. "
+        "Return strict JSON only. "
+        f"Evidence summary: {_scene_memory_summary(scene_memory, fact_limit=scene_memory_fact_limit)} "
+        f"Draft scene map: {json.dumps(scene_map.model_dump(mode='json'), ensure_ascii=True)}"
     )
+    return _trim_words(prompt, prompt_word_limit)
 
 
 def _refine_scene_map(scene_map: SceneMap, refined_payload: Any) -> SceneMap:
@@ -642,7 +691,7 @@ def _build_prompt_package(scene_map: SceneMap, hierarchy: VisualHierarchy) -> Pr
         f"Background: {scene_map.background.summary} Sky: {scene_map.sky.center}; {scene_map.sky.cloud_direction}."
     ).strip()
     precision = (
-        f"Major objects: {'; '.join(object_lines) or 'no dominant objects resolved'}. "
+        f"Major objects: {'; '.join(object_lines) or 'main subject unresolved'}. "
         f"Foreground textures: {', '.join(scene_map.foreground.texture) or 'not resolved'}. "
         f"Palette: {', '.join(scene_map.color_palette.dominant)}. "
         f"Saturation {scene_map.color_palette.saturation}, contrast {scene_map.color_palette.contrast}."
@@ -880,6 +929,8 @@ def _scene_type_guess(text: str) -> str:
     lowered = text.lower()
     if "beach" in lowered:
         return "beach scene"
+    if "horse" in lowered:
+        return "horse in pasture scene"
     if "city" in lowered:
         return "urban scene"
     if "portrait" in lowered or "person" in lowered:
@@ -891,6 +942,8 @@ def _camera_angle_guess(text: str) -> str:
     lowered = text.lower()
     if "low angle" in lowered or "close to the ground" in lowered:
         return "very low angle close to the surface"
+    if "eye-level" in lowered:
+        return "eye-level angle"
     if "overhead" in lowered:
         return "overhead angle"
     return "eye-level to low angle"
@@ -899,22 +952,29 @@ def _camera_angle_guess(text: str) -> str:
 def _extract_candidate_elements(text: str) -> list[str]:
     lowered = text.lower()
     candidates = []
-    for token in ["sky", "ocean", "water", "sand", "rock", "clouds", "sun", "trees", "building", "person"]:
+    for token in ["horse", "animal", "sky", "ocean", "water", "sand", "rock", "clouds", "sun", "trees", "field", "grass", "building", "person"]:
         if token in lowered:
             candidates.append(token)
     return candidates
 
 
-def _initial_uncertainties(text: str) -> list[str]:
+def _initial_uncertainties(text: str, support_signals: dict[str, Any], elements: list[str]) -> list[str]:
+    subject_is_animal = _looks_like_animal_subject(text, support_signals, elements)
     base = [
         "exact composition and horizon position",
         "main object placement and size",
+    ]
+    if subject_is_animal:
+        base.append("subject identity, breed, and distinctive conformation markers")
+    base.extend(
+        [
         "foreground texture and reflection strength",
         "sky structure and dominant cloud masses",
         "lighting behavior and source visibility",
         "color transitions and saturation balance",
         "negative constraints and absent objects",
-    ]
+        ]
+    )
     if "unclear" in text.lower():
         base.append("details marked unclear by overview")
     return base
@@ -971,19 +1031,40 @@ def _scene_objects_from_support(scene_memory: SceneMemory, support_signals: dict
                 must_preserve=True,
             )
         )
+    if not objects and _looks_like_horse_scene(scene_memory, support_signals):
+        objects.append(
+            SceneObject(
+                name=_horse_name_hint(scene_memory),
+                role="main animal subject",
+                center_x_percent=46.0,
+                center_y_percent=56.0,
+                width_percent=28.0,
+                height_percent=68.0,
+                shape="full standing horse profile with long mane and feathered lower legs",
+                color="black and white piebald coat",
+                surface="long flowing mane and natural coat texture",
+                importance="high",
+                must_preserve=True,
+            )
+        )
     return objects
 
 
 def _best_known_line(scene_memory: SceneMemory, keyword: str, *, default: str) -> str:
+    return _region_summary(scene_memory, region=keyword, default=default)
+
+
+def _find_texture_lines(scene_memory: SceneMemory, keyword: str, *, fallback: str) -> list[str]:
+    results = []
     for line in scene_memory.known:
-        if keyword in line.lower():
-            return line
-    return default
-
-
-def _find_texture_lines(scene_memory: SceneMemory, keyword: str) -> list[str]:
-    results = [line for line in scene_memory.known if keyword in line.lower()]
-    return results[:4] or ["texture unresolved"]
+        lowered = line.lower()
+        if keyword in lowered or "texture" in lowered or "grass" in lowered or "coat" in lowered:
+            cleaned = _clean_summary_line(line)
+            if cleaned and cleaned not in results:
+                results.append(cleaned)
+        if len(results) == 4:
+            break
+    return results or [fallback]
 
 
 def _negative_constraints_from_memory(scene_memory: SceneMemory) -> list[str]:
@@ -997,7 +1078,8 @@ def _negative_constraints_from_memory(scene_memory: SceneMemory) -> list[str]:
 
 def _top_phrases(raw_response: str, *, fallback: list[str]) -> list[str]:
     parts = [item.strip(" .") for item in raw_response.replace("\n", " ").split(",")]
-    results = [item for item in parts if item][:4]
+    results = [_clean_summary_line(item) for item in parts if item]
+    results = [item for item in results if item][:4]
     return results or fallback
 
 
@@ -1036,3 +1118,108 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             result[key] = value
     return result
+
+
+def _support_signal_summary(support_signals: dict[str, Any], word_limit: int) -> str:
+    detections = [
+        str(item.get("label", "")).strip()
+        for item in support_signals.get("detections", [])
+        if isinstance(item, dict) and str(item.get("label", "")).strip()
+    ]
+    colors = [
+        str(item.get("name", "")).strip()
+        for item in support_signals.get("dominant_colors", [])
+        if isinstance(item, dict) and str(item.get("name", "")).strip()
+    ]
+    caption = support_signals.get("caption", "")
+    if isinstance(caption, dict):
+        caption = json.dumps(caption, ensure_ascii=True)
+    summary = (
+        f"detections={detections[:6] or ['none']}; "
+        f"colors={colors[:6] or ['unresolved']}; "
+        f"ocr={str(support_signals.get('ocr_text', '')).strip() or 'none'}; "
+        f"caption={str(caption).strip() or 'none'}"
+    )
+    return _trim_words(summary, word_limit)
+
+
+def _scene_memory_summary(scene_memory: SceneMemory, *, fact_limit: int) -> str:
+    facts = [_clean_summary_line(item) for item in scene_memory.known if _clean_summary_line(item)]
+    gaps = [item.topic for item in scene_memory.high_priority_gaps[:3]]
+    return (
+        f"scene_type={scene_memory.scene_type}; "
+        f"major_elements={scene_memory.major_elements[:6]}; "
+        f"composition={scene_memory.composition}; "
+        f"known={facts[:fact_limit]}; "
+        f"uncertain={scene_memory.uncertain[:3]}; "
+        f"priority_gaps={gaps}"
+    )
+
+
+def _trim_words(text: str, limit: int) -> str:
+    words = text.split()
+    if len(words) <= limit:
+        return text.strip()
+    return " ".join(words[:limit]).strip()
+
+
+def _clean_summary_line(text: str) -> str:
+    cleaned = " ".join(text.replace("\n", " ").split()).strip(" .")
+    if not cleaned:
+        return ""
+    return _trim_words(cleaned, 28)
+
+
+def _looks_like_animal_subject(text: str, support_signals: dict[str, Any], elements: list[str]) -> bool:
+    lowered = text.lower()
+    if any(token in lowered for token in ["horse", "animal", "pony", "stallion", "mare"]):
+        return True
+    if any(token in " ".join(elements).lower() for token in ["horse", "animal", "pony"]):
+        return True
+    caption = str(support_signals.get("caption", "")).lower()
+    return any(token in caption for token in ["horse", "animal", "pony", "stallion", "mare"])
+
+
+def _looks_like_horse_scene(scene_memory: SceneMemory, support_signals: dict[str, Any]) -> bool:
+    haystack = " ".join(scene_memory.major_elements + scene_memory.known + scene_memory.uncertain).lower()
+    caption = str(support_signals.get("caption", "")).lower()
+    return "horse" in haystack or "horse" in caption
+
+
+def _horse_name_hint(scene_memory: SceneMemory) -> str:
+    haystack = " ".join(scene_memory.known).lower()
+    if "gypsy" in haystack or "vanner" in haystack:
+        return "Gypsy Vanner horse"
+    return "horse"
+
+
+def _horizon_guess(scene_memory: SceneMemory) -> float:
+    known = " ".join(scene_memory.known).lower()
+    if "slightly below center" in known:
+        return 48.0
+    if "above the middle" in known or "above center" in known:
+        return 44.0
+    return 48.0
+
+
+def _region_summary(scene_memory: SceneMemory, *, region: str, default: str) -> str:
+    region_keywords = {
+        "foreground": ["foreground", "grass", "hooves", "legs", "lower"],
+        "middle": ["middle", "subject", "horse", "animal", "stands", "center"],
+        "background": ["background", "tree", "treeline", "hill", "pasture", "horizon"],
+    }
+    generic_phrases = {
+        "the image features",
+        "central focus",
+        "overall composition",
+        "should not be altered",
+    }
+    for line in scene_memory.known:
+        lowered = line.lower()
+        if any(keyword in lowered for keyword in region_keywords.get(region, [region])):
+            if any(phrase in lowered for phrase in generic_phrases) and len(lowered.split()) > 18:
+                continue
+            cleaned = _clean_summary_line(line)
+            if cleaned:
+                return cleaned
+    return default

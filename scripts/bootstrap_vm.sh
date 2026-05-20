@@ -125,8 +125,14 @@ install_openclaw_if_missing() {
 }
 
 setup_qwen_image_backend() {
-  if [[ -x "$ROOT_DIR/scripts/setup_qwen_image_backend.sh" ]]; then
-    "$ROOT_DIR/scripts/setup_qwen_image_backend.sh"
+  if [[ -f "$ROOT_DIR/scripts/setup_qwen_image_backend.sh" ]]; then
+    bash "$ROOT_DIR/scripts/setup_qwen_image_backend.sh"
+  fi
+}
+
+setup_prompt_models() {
+  if [[ -f "$ROOT_DIR/scripts/setup_prompt_models.sh" ]]; then
+    bash "$ROOT_DIR/scripts/setup_prompt_models.sh"
   fi
 }
 
@@ -174,6 +180,7 @@ main() {
   ensure_ollama_running
   pull_model_if_missing "qwen2.5vl:7b"
   pull_model_if_missing "qwen2.5-coder:14b"
+  setup_prompt_models
   reasoning_model="$(choose_reasoning_model)"
   pull_model_if_missing "$reasoning_model"
   write_openclaw_local_override "$reasoning_model"

@@ -16,8 +16,20 @@ from image_analyzer.providers.base import ProviderArtifact
 def _visual_artifact_for_prompt(prompt: str) -> ProviderArtifact:
     lowered = prompt.lower()
     if "choose the single most important unresolved visual detail" in lowered:
+        if "breed" in lowered or "conformation" in lowered or "identity" in lowered:
+            return ProviderArtifact(provider="ollama", data={"content": "Focus on the horse's breed or type and the most distinctive body markers."})
         return ProviderArtifact(provider="ollama", data={"content": "Focus on the horizon placement and the foreground object size."})
     if "focus only on" in lowered:
+        if "breed" in lowered or "conformation" in lowered or "identity" in lowered:
+            return ProviderArtifact(
+                provider="ollama",
+                data={
+                    "content": (
+                        "The subject appears to be a Gypsy Vanner type horse, identified by the piebald black-and-white coat, "
+                        "heavy feathering on the lower legs, compact cob build, and long full mane."
+                    )
+                },
+            )
         return ProviderArtifact(
             provider="ollama",
             data={
@@ -37,6 +49,21 @@ def _visual_artifact_for_prompt(prompt: str) -> ProviderArtifact:
             )
         },
     )
+
+
+def _horse_visual_artifact_for_prompt(prompt: str) -> ProviderArtifact:
+    lowered = prompt.lower()
+    if "analyze this image for faithful recreation" in lowered:
+        return ProviderArtifact(
+            provider="ollama",
+            data={
+                "content": (
+                    "A horse stands slightly left of center in a grassy field with a tree line behind it. "
+                    "Follow-up is needed for the horse's exact breed markers, placement, and the background separation."
+                )
+            },
+        )
+    return _visual_artifact_for_prompt(prompt)
 
 
 class DetailedPipelineTests(unittest.TestCase):
@@ -66,6 +93,42 @@ class DetailedPipelineTests(unittest.TestCase):
             self.assertEqual(report.termination.reason, "prompt_only_completed")
             self.assertTrue(report.question_history)
             self.assertIn("small dark rounded rock", report.prompt_package.final_prompt.lower())
+
+    def test_horse_scene_adds_breed_gap_and_subject_hint(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        config = load_settings(project_root)
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            image_path = tmp_path / "horse.png"
+            Image.new("RGB", (1280, 853), (160, 190, 140)).save(image_path)
+
+            with patch(
+                "image_analyzer.providers.ollama.OllamaSynthesisProvider.analyze_visual_pass",
+                side_effect=lambda image_path, prompt, num_predict=900: _horse_visual_artifact_for_prompt(prompt),
+            ), patch(
+                "image_analyzer.providers.ollama.OllamaSynthesisProvider.generate_json",
+                return_value=ProviderArtifact(provider="ollama", data={"json": {}}),
+            ), patch(
+                "image_analyzer.detailed_pipeline._collect_support_signals",
+                return_value=(
+                    {
+                        "file_name": "horse.png",
+                        "sha256": "abc",
+                        "width": 1280,
+                        "height": 853,
+                        "dominant_colors": [{"name": "green"}, {"name": "white"}],
+                        "ocr_text": "",
+                        "detections": [],
+                        "caption": "A black and white horse standing in a green pasture.",
+                    },
+                    [],
+                ),
+            ):
+                report = run_image_flow(image_path, config, output_root=tmp_path / "runs")
+
+            topics = [item.topic.lower() for item in report.question_history]
+            self.assertTrue(any("breed" in topic or "identity" in topic for topic in topics))
+            self.assertIn("horse", report.prompt_package.final_prompt.lower())
 
     def test_run_image_flow_with_generation_writes_similarity(self) -> None:
         project_root = Path(__file__).resolve().parents[1]

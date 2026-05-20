@@ -66,16 +66,18 @@ class FlorenceRegionProvider(OptionalProvider):
             return ProviderArtifact(provider=self.name, warnings=[f"Florence-2 unavailable: {exc}"])
 
         allow_downloads = os.environ.get("IMAGE_ANALYZER_ALLOW_MODEL_DOWNLOADS", "").lower() in {"1", "true", "yes"}
+        model_ref = os.environ.get("IMAGE_ANALYZER_FLORENCE_MODEL_DIR", "microsoft/Florence-2-large")
+        local_only = Path(model_ref).exists() and Path(model_ref).is_dir()
         try:
             processor = AutoProcessor.from_pretrained(
-                "microsoft/Florence-2-large",
+                model_ref,
                 trust_remote_code=True,
-                local_files_only=not allow_downloads,
+                local_files_only=local_only or not allow_downloads,
             )
             model = AutoModelForCausalLM.from_pretrained(
-                "microsoft/Florence-2-large",
+                model_ref,
                 trust_remote_code=True,
-                local_files_only=not allow_downloads,
+                local_files_only=local_only or not allow_downloads,
             )
             image = Image.open(image_path).convert("RGB")
             prompt = "<MORE_DETAILED_CAPTION>"
@@ -92,7 +94,8 @@ class FlorenceRegionProvider(OptionalProvider):
                 task=prompt,
                 image_size=(image.width, image.height),
             )
-            return ProviderArtifact(provider=self.name, data={"caption": parsed})
+            caption = parsed.get(prompt, parsed) if isinstance(parsed, dict) else parsed
+            return ProviderArtifact(provider=self.name, data={"caption": caption})
         except Exception as exc:
             return ProviderArtifact(provider=self.name, warnings=[f"Florence-2 failed: {exc}"])
 

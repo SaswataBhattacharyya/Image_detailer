@@ -16,7 +16,7 @@ models:
   analysis_model: qwen2.5vl:7b
   structuring_model: qwen2.5-coder:14b
   comparison_model: qwen2.5vl:7b
-  ollama_timeout_sec: 180
+  ollama_timeout_sec: 300
   ollama_max_loaded_models: 1
   ollama_num_parallel: 1
 
@@ -28,6 +28,9 @@ detailed:
   target_score: 0.80
   max_full_restarts: 3
   max_question_rounds: 6
+  prompt_word_limit: 360
+  scene_memory_fact_limit: 6
+  support_signal_word_limit: 120
   scene_weight: 0.65
   perceptual_weight: 0.35
   visual_passes:

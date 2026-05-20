@@ -44,6 +44,9 @@ class DetailedPipelineConfig:
     target_score: float
     max_full_restarts: int
     max_question_rounds: int
+    prompt_word_limit: int
+    scene_memory_fact_limit: int
+    support_signal_word_limit: int
     scene_weight: float
     perceptual_weight: float
     visual_passes: tuple[str, ...]
@@ -118,6 +121,9 @@ def load_settings(project_root: Path) -> AppConfig:
             target_score=float(payload["detailed"].get("target_score", 0.95)),
             max_full_restarts=int(payload["detailed"].get("max_full_restarts", 3)),
             max_question_rounds=int(payload["detailed"].get("max_question_rounds", 6)),
+            prompt_word_limit=int(payload["detailed"].get("prompt_word_limit", 360)),
+            scene_memory_fact_limit=int(payload["detailed"].get("scene_memory_fact_limit", 6)),
+            support_signal_word_limit=int(payload["detailed"].get("support_signal_word_limit", 120)),
             scene_weight=float(payload["detailed"].get("scene_weight", 0.65)),
             perceptual_weight=float(payload["detailed"].get("perceptual_weight", 0.35)),
             visual_passes=tuple(str(item) for item in payload["detailed"]["visual_passes"]),
