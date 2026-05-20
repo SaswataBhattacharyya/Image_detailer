@@ -164,7 +164,7 @@ def run_image_flow(
 
         answer_prompt = _build_focused_extraction_prompt(next_gap.topic, question_text)
         answer_artifact = vlm_client.analyze_visual_pass(image_path, answer_prompt, num_predict=420)
-        answer_text = str(answer_artifact.data.get("content", "")).strip()
+        answer_text = _normalize_memory_text(str(answer_artifact.data.get("content", "")).strip())
         warnings.extend(answer_artifact.warnings)
         model_calls.append({"phase": "question_answer", "round": round_index, "topic": next_gap.topic, "warnings": answer_artifact.warnings})
         dump_text(paths["passes"] / f"pass_{round_index * 2 + 2:02d}_answer.txt", answer_text + "\n")
@@ -416,7 +416,7 @@ def _run_overview_pass(
     )
     artifact = client.analyze_visual_pass(image_path, prompt, num_predict=1200)
     warnings.extend(artifact.warnings)
-    raw = str(artifact.data.get("content", "")).strip()
+    raw = _normalize_memory_text(str(artifact.data.get("content", "")).strip())
     model_calls.append({"phase": "overview", "warnings": artifact.warnings})
     dump_text(paths["passes"] / "pass_01_overview.txt", raw + "\n")
     return ScenePassResult(
@@ -502,7 +502,7 @@ def _build_next_question_prompt(
 
 
 def _extract_question(raw: str, gap: GapRecord) -> str:
-    text = raw.strip()
+    text = _normalize_memory_text(raw.strip())
     if text:
         return _trim_words(text.splitlines()[0].strip(), 45)
     return (
@@ -525,7 +525,7 @@ def _build_focused_extraction_prompt(topic: str, question: str) -> str:
 
 
 def _update_scene_memory(scene_memory: SceneMemory, gap: GapRecord, answer_text: str, next_version: int) -> SceneMemory:
-    updated_known = scene_memory.known + [answer_text]
+    updated_known = scene_memory.known + [_normalize_memory_text(answer_text)]
     remaining_uncertain = [item for item in scene_memory.uncertain if gap.topic.lower() not in item.lower()]
     if "unclear" in answer_text.lower() or "uncertain" in answer_text.lower():
         remaining_uncertain.append(f"{gap.topic} remains partially uncertain")
@@ -685,7 +685,7 @@ def _build_prompt_package(scene_map: SceneMap, hierarchy: VisualHierarchy) -> Pr
             f"{item.shape}, {item.surface}, color {item.color}"
         )
     base = (
-        f"{scene_map.scene_type if hasattr(scene_map, 'scene_type') else ''} Realistic image in {scene_map.canvas.aspect_ratio} "
+        f"Realistic image in {scene_map.canvas.aspect_ratio} "
         f"{scene_map.canvas.orientation} format. Camera angle: {scene_map.canvas.camera_angle}. "
         f"Foreground: {scene_map.foreground.summary} Middle ground: {scene_map.middle_ground.summary} "
         f"Background: {scene_map.background.summary} Sky: {scene_map.sky.center}; {scene_map.sky.cloud_direction}."
@@ -1056,9 +1056,18 @@ def _best_known_line(scene_memory: SceneMemory, keyword: str, *, default: str) -
 
 def _find_texture_lines(scene_memory: SceneMemory, keyword: str, *, fallback: str) -> list[str]:
     results = []
+    region_terms = {
+        "foreground": ["foreground", "grass", "ground", "hoof", "hooves", "legs", "lower"],
+        "middle": ["middle", "coat", "mane", "subject", "horse", "animal"],
+        "background": ["background", "tree", "treeline", "hill", "sky"],
+    }
     for line in scene_memory.known:
         lowered = line.lower()
-        if keyword in lowered or "texture" in lowered or "grass" in lowered or "coat" in lowered:
+        keyword_hit = any(term in lowered for term in region_terms.get(keyword, [keyword]))
+        broad_texture_hit = "texture" in lowered or "grass" in lowered
+        if keyword == "middle":
+            broad_texture_hit = broad_texture_hit or "coat" in lowered or "mane" in lowered
+        if keyword_hit or broad_texture_hit:
             cleaned = _clean_summary_line(line)
             if cleaned and cleaned not in results:
                 results.append(cleaned)
@@ -1164,7 +1173,7 @@ def _trim_words(text: str, limit: int) -> str:
 
 
 def _clean_summary_line(text: str) -> str:
-    cleaned = " ".join(text.replace("\n", " ").split()).strip(" .")
+    cleaned = _normalize_memory_text(text)
     if not cleaned:
         return ""
     return _trim_words(cleaned, 28)
@@ -1210,9 +1219,12 @@ def _region_summary(scene_memory: SceneMemory, *, region: str, default: str) -> 
     }
     generic_phrases = {
         "the image features",
+        "the image depicts",
         "central focus",
         "overall composition",
         "should not be altered",
+        "scene analysis",
+        "overall scene structure",
     }
     for line in scene_memory.known:
         lowered = line.lower()
@@ -1223,3 +1235,27 @@ def _region_summary(scene_memory: SceneMemory, *, region: str, default: str) -> 
             if cleaned:
                 return cleaned
     return default
+
+
+def _normalize_memory_text(text: str) -> str:
+    cleaned = text.replace("\r", "\n")
+    normalized_lines: list[str] = []
+    for raw_line in cleaned.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        while line.startswith("#"):
+            line = line[1:].strip()
+        if line.startswith(("-", "*")):
+            line = line[1:].strip()
+        line = " ".join(line.split())
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered in {"scene analysis:", "overall scene structure:"}:
+            continue
+        normalized_lines.append(line)
+    normalized = " ".join(normalized_lines)
+    normalized = normalized.replace("Scene Analysis:", "").replace("Overall Scene Structure:", "")
+    normalized = " ".join(normalized.split()).strip(" .")
+    return normalized
