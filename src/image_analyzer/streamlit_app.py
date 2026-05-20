@@ -25,20 +25,22 @@ def main() -> None:
         mode = st.radio("Mode", ["Single image", "Batch folder"], index=0)
         output_root_raw = st.text_input("Run folder root", value=str(config.detailed.run_root_dir))
         project_name = st.text_input("Project name", value=config.detailed.default_project_name)
+        enable_generation = st.checkbox("Enable image generation + comparison", value=config.detailed.enable_generation_by_default)
         target_score = st.slider("Similarity threshold", min_value=0.50, max_value=0.99, value=float(config.detailed.target_score), step=0.01)
         max_full_restarts = st.number_input("Max full restarts", min_value=1, max_value=10, value=int(config.detailed.max_full_restarts), step=1)
         max_question_rounds = st.number_input("Max question rounds", min_value=1, max_value=20, value=int(config.detailed.max_question_rounds), step=1)
 
     output_root = Path(output_root_raw).expanduser()
     if mode == "Single image":
-        _render_single_mode(output_root, project_name, target_score, int(max_full_restarts), int(max_question_rounds))
+        _render_single_mode(output_root, project_name, enable_generation, target_score, int(max_full_restarts), int(max_question_rounds))
     else:
-        _render_batch_mode(output_root, project_name)
+        _render_batch_mode(output_root, project_name, enable_generation)
 
 
 def _render_single_mode(
     output_root: Path,
     project_name: str,
+    enable_generation: bool,
     target_score: float,
     max_full_restarts: int,
     max_question_rounds: int,
@@ -62,6 +64,7 @@ def _render_single_mode(
         [image_path],
         output_root=output_root,
         project_name=project_name,
+        enable_generation=enable_generation,
         target_score=target_score,
         max_full_restarts=max_full_restarts,
         max_question_rounds=max_question_rounds,
@@ -69,7 +72,7 @@ def _render_single_mode(
     )
 
 
-def _render_batch_mode(output_root: Path, project_name: str) -> None:
+def _render_batch_mode(output_root: Path, project_name: str, enable_generation: bool) -> None:
     import streamlit as st
 
     batch_path_value = st.text_input("Input folder or manifest path", value="")
@@ -98,6 +101,7 @@ def _render_batch_mode(output_root: Path, project_name: str) -> None:
         image_paths,
         output_root=output_root,
         project_name=project_name,
+        enable_generation=enable_generation,
         target_score=None,
         max_full_restarts=None,
         max_question_rounds=None,
@@ -123,6 +127,7 @@ def _run_streamlit_flow(
     *,
     output_root: Path,
     project_name: str,
+    enable_generation: bool,
     target_score: float | None,
     max_full_restarts: int | None,
     max_question_rounds: int | None,
@@ -139,6 +144,7 @@ def _run_streamlit_flow(
     generated_slot = left_col.empty()
     latest_event_slot = left_col.empty()
     similarity_slot = right_col.empty()
+    error_slot = right_col.empty()
     event_log_slot = right_col.empty()
     result_slot = right_col.empty()
 
@@ -154,6 +160,8 @@ def _run_streamlit_flow(
         ]
         event_log_slot.code("\n".join(event_lines), language="text")
         payload = event.get("payload", {}) if isinstance(event.get("payload"), dict) else {}
+        if str(event.get("status")) in {"warning", "failed", "error"}:
+            error_slot.error(f"{event['stage']}: {event['message']}")
         if "output_image" in payload and payload["output_image"]:
             candidate = Path(str(payload["output_image"]))
             if candidate.exists():
@@ -167,12 +175,14 @@ def _run_streamlit_flow(
         image_slot.image(str(image_path), caption=image_path.name, use_container_width=True)
         generated_slot.empty()
         similarity_slot.empty()
+        error_slot.empty()
         collected_events.clear()
         report = run_image_flow(
             image_path,
             config,
             output_root=output_root,
             project_name=project_name,
+            enable_generation=enable_generation,
             target_score=target_score,
             max_full_restarts=max_full_restarts,
             max_question_rounds=max_question_rounds,
@@ -195,8 +205,19 @@ def _render_result(container, report: RunReport) -> None:
     score_percent = round(report.termination.best_score * 100.0, 2)
     container.subheader("Current Result")
     container.write(f"Run directory: `{report.run_dir}`")
-    container.write(f"Similarity: **{score_percent}%**")
+    if report.generation.status == "completed":
+        container.write(f"Similarity: **{score_percent}%**")
+    else:
+        container.write("Similarity: **not computed**")
     container.write(f"Termination: `{report.termination.reason}`")
+    if report.generation.status == "skipped":
+        container.info(report.generation.message)
+    elif report.generation.status != "completed":
+        container.error(f"Generation status: {report.generation.status} | {report.generation.message}")
+    elif report.comparison is None:
+        container.warning("No similarity comparison artifact was produced for the final result.")
+    if report.warnings:
+        container.warning("\n".join(report.warnings))
     container.write(report.prompt_package.final_prompt)
 
     text_tab, json_tab, loop_tab = container.tabs(["Text Outputs", "JSON Outputs", "Loop Details"])
@@ -226,6 +247,7 @@ def _render_result(container, report: RunReport) -> None:
                 "question_history": [item.model_dump(mode="json") for item in report.question_history],
                 "gap_history": [[gap.model_dump(mode="json") for gap in items] for items in report.gap_history],
                 "iterations": [item.model_dump(mode="json") for item in report.iterations],
+                "generation": report.generation.model_dump(mode="json"),
                 "warnings": report.warnings,
             }
         )

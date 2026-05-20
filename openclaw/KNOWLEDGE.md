@@ -22,5 +22,5 @@ Important outputs:
 - `outputs/detailed_recreation_text.txt`
 - `outputs/concise_generation_prompt.txt`
 - `outputs/critical_constraints.txt`
-- `comparisons/similarity_v*.json`
+- `comparisons/similarity_v*.json` when optional generation is enabled
 - `reports/run_report.json`

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="$ROOT_DIR/configs/openclaw_supervisor.env"
+LOCAL_OVERRIDE_FILE="$ROOT_DIR/configs/openclaw_supervisor.local.env"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Missing config: $CONFIG_FILE" >&2
@@ -11,6 +12,10 @@ fi
 
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
+if [[ -f "$LOCAL_OVERRIDE_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$LOCAL_OVERRIDE_FILE"
+fi
 
 have_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -62,4 +67,3 @@ main() {
 }
 
 main "$@"
-

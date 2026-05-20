@@ -19,11 +19,13 @@ def main() -> None:
     image_parser.add_argument("--target-score", type=float, default=None)
     image_parser.add_argument("--max-full-restarts", type=int, default=None)
     image_parser.add_argument("--max-question-rounds", type=int, default=None)
+    image_parser.add_argument("--enable-generation", action="store_true")
 
     batch_parser = subparsers.add_parser("analyze-batch")
     batch_parser.add_argument("input_dir")
     batch_parser.add_argument("--output-dir", default=None)
     batch_parser.add_argument("--project-name", default=None)
+    batch_parser.add_argument("--enable-generation", action="store_true")
 
     # Compatibility alias for older docs and scripts. This uses the same unified engine.
     detailed_parser = subparsers.add_parser("analyze-detailed")
@@ -33,6 +35,7 @@ def main() -> None:
     detailed_parser.add_argument("--target-score", type=float, default=None)
     detailed_parser.add_argument("--max-full-restarts", type=int, default=None)
     detailed_parser.add_argument("--max-question-rounds", type=int, default=None)
+    detailed_parser.add_argument("--enable-generation", action="store_true")
 
     args = parser.parse_args()
     project_root = Path(__file__).resolve().parents[3]
@@ -48,9 +51,13 @@ def main() -> None:
             target_score=args.target_score,
             max_full_restarts=args.max_full_restarts,
             max_question_rounds=args.max_question_rounds,
+            enable_generation=args.enable_generation,
         )
         print(f"Run directory: {report.run_dir}")
-        print(f"Similarity: {round(report.termination.best_score * 100.0, 2)}%")
+        if report.generation.status == "completed":
+            print(f"Similarity: {round(report.termination.best_score * 100.0, 2)}%")
+        else:
+            print(f"Generation: {report.generation.status} | {report.generation.message}")
         if report.generation.output_image:
             print(f"Generated image: {report.generation.output_image}")
         print(report.prompt_package.final_prompt)
@@ -63,6 +70,7 @@ def main() -> None:
         config,
         output_root=output_dir,
         project_name=args.project_name,
+        enable_generation=args.enable_generation,
     )
     print(f"Processed {len(reports)} images.")
     for report in reports:

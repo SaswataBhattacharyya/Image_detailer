@@ -52,6 +52,7 @@ def run_image_flow(
     target_score: float | None = None,
     max_full_restarts: int | None = None,
     max_question_rounds: int | None = None,
+    enable_generation: bool | None = None,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> RunReport:
     image_path = image_path.resolve()
@@ -70,6 +71,7 @@ def run_image_flow(
     target_similarity = target_score if target_score is not None else config.detailed.target_score
     max_restarts = max_full_restarts if max_full_restarts is not None else config.detailed.max_full_restarts
     max_rounds = max_question_rounds if max_question_rounds is not None else config.detailed.max_question_rounds
+    generation_enabled = config.detailed.enable_generation_by_default if enable_generation is None else enable_generation
 
     run_config = RunConfig(
         project_name=project_name or config.detailed.default_project_name,
@@ -80,8 +82,8 @@ def run_image_flow(
         comparison_model=config.models.comparison_model,
         iterations=max_restarts,
         aspect_ratio=aspect_ratio,
-        enable_generation=config.detailed.enable_generation_by_default,
-        enable_comparison=True,
+        enable_generation=generation_enabled,
+        enable_comparison=generation_enabled,
         target_score=target_similarity,
         max_iterations=max_restarts,
         scene_weight=config.detailed.scene_weight,
@@ -211,72 +213,81 @@ def run_image_flow(
     loop_results: list[IterationResult] = []
     best_score = -1.0
     best_result: IterationResult | None = None
-    for restart_index in range(1, max_restarts + 1):
-        iter_prompt = _prompt_for_restart(prompt_package, restart_index)
-        _write_prompt_files(paths["outputs"], iter_prompt, restart_index)
-        _emit_event(event_callback, stage="generation", status="running", message=f"Starting generation attempt {restart_index}.", payload={"attempt": restart_index, "prompt": iter_prompt.generator_prompt})
-        generation = _generate_image_iteration(
-            iteration=restart_index,
-            paths=paths,
-            prompt_package=iter_prompt,
-            generation_config=generation_config,
-            enabled=True,
-        )
-        _emit_event(event_callback, stage="generation", status="completed" if generation.output_image else "warning", message=generation.message, payload={"attempt": restart_index, "output_image": generation.output_image, "status": generation.status})
-        comparison = None
-        hybrid = None
-        correction = None
-        if generation.output_image:
-            perceptual = compute_perceptual_similarity(copied_reference, Path(generation.output_image))
-            code_score = perceptual.perceptual_similarity_score
-            comparison = ComparisonReport(
-                overall_similarity_score=code_score,
-                semantic_similarity_score=0.0,
-                perceptual_similarity_score=code_score,
-                issues=[],
-                negative_prompt_additions=[],
+    if generation_enabled:
+        for restart_index in range(1, max_restarts + 1):
+            iter_prompt = _prompt_for_restart(prompt_package, restart_index)
+            _write_prompt_files(paths["outputs"], iter_prompt, restart_index)
+            _emit_event(event_callback, stage="generation", status="running", message=f"Starting generation attempt {restart_index}.", payload={"attempt": restart_index, "prompt": iter_prompt.generator_prompt})
+            generation = _generate_image_iteration(
+                iteration=restart_index,
+                paths=paths,
+                prompt_package=iter_prompt,
+                generation_config=generation_config,
+                enabled=True,
             )
-            hybrid = HybridSimilarityScore(
-                weighted_score=code_score,
-                semantic=SemanticScoreBreakdown(
-                    composition_score=0.0,
-                    object_score=0.0,
-                    lighting_score=0.0,
-                    constraint_score=0.0,
+            _emit_event(event_callback, stage="generation", status="completed" if generation.output_image else "warning", message=generation.message, payload={"attempt": restart_index, "output_image": generation.output_image, "status": generation.status})
+            comparison = None
+            hybrid = None
+            correction = None
+            if generation.output_image:
+                perceptual = compute_perceptual_similarity(copied_reference, Path(generation.output_image))
+                code_score = perceptual.perceptual_similarity_score
+                comparison = ComparisonReport(
+                    overall_similarity_score=code_score,
                     semantic_similarity_score=0.0,
-                ),
-                perceptual=perceptual,
-                scene_weight=0.0,
-                perceptual_weight=1.0,
+                    perceptual_similarity_score=code_score,
+                    issues=[],
+                    negative_prompt_additions=[],
+                )
+                hybrid = HybridSimilarityScore(
+                    weighted_score=code_score,
+                    semantic=SemanticScoreBreakdown(
+                        composition_score=0.0,
+                        object_score=0.0,
+                        lighting_score=0.0,
+                        constraint_score=0.0,
+                        semantic_similarity_score=0.0,
+                    ),
+                    perceptual=perceptual,
+                    scene_weight=0.0,
+                    perceptual_weight=1.0,
+                )
+                dump_json(paths["comparisons"] / f"comparison_v{restart_index}.json", comparison.model_dump(mode="json"))
+                dump_json(paths["comparisons"] / f"similarity_v{restart_index}.json", hybrid.model_dump(mode="json"))
+                _emit_event(event_callback, stage="similarity", status="completed", message=f"Similarity for attempt {restart_index}: {round(code_score * 100.0, 2)}%.", payload={"attempt": restart_index, "similarity": code_score, "comparison": comparison.model_dump(mode="json"), "hybrid_score": hybrid.model_dump(mode="json")})
+            loop_result = IterationResult(
+                iteration=restart_index,
+                prompt_package=iter_prompt,
+                generation=generation,
+                comparison=comparison,
+                hybrid_score=hybrid,
+                correction=correction,
+                accepted=bool(hybrid and hybrid.weighted_score >= target_similarity),
             )
-            dump_json(paths["comparisons"] / f"comparison_v{restart_index}.json", comparison.model_dump(mode="json"))
-            dump_json(paths["comparisons"] / f"similarity_v{restart_index}.json", hybrid.model_dump(mode="json"))
-            _emit_event(event_callback, stage="similarity", status="completed", message=f"Similarity for attempt {restart_index}: {round(code_score * 100.0, 2)}%.", payload={"attempt": restart_index, "similarity": code_score, "comparison": comparison.model_dump(mode="json"), "hybrid_score": hybrid.model_dump(mode="json")})
-        loop_result = IterationResult(
-            iteration=restart_index,
-            prompt_package=iter_prompt,
-            generation=generation,
-            comparison=comparison,
-            hybrid_score=hybrid,
-            correction=correction,
-            accepted=bool(hybrid and hybrid.weighted_score >= target_similarity),
-        )
-        loop_results.append(loop_result)
-        score = hybrid.weighted_score if hybrid else 0.0
-        if score > best_score:
-            best_score = score
-            best_result = loop_result
-        if loop_result.accepted:
-            _emit_event(event_callback, stage="loop_control", status="completed", message=f"Accepted attempt {restart_index} with similarity {round(score * 100.0, 2)}%.", payload={"attempt": restart_index, "similarity": score, "accepted": True})
-            break
-        _emit_event(event_callback, stage="loop_control", status="warning", message=f"Similarity below threshold on attempt {restart_index}; restarting full process logic.", payload={"attempt": restart_index, "similarity": score, "accepted": False})
+            loop_results.append(loop_result)
+            score = hybrid.weighted_score if hybrid else 0.0
+            if score > best_score:
+                best_score = score
+                best_result = loop_result
+            if loop_result.accepted:
+                _emit_event(event_callback, stage="loop_control", status="completed", message=f"Accepted attempt {restart_index} with similarity {round(score * 100.0, 2)}%.", payload={"attempt": restart_index, "similarity": score, "accepted": True})
+                break
+            if generation.status == "failed_runtime" and generation.output_image is None:
+                _emit_event(event_callback, stage="loop_control", status="error", message="Generation failed before producing an image; stopping restart loop.", payload={"attempt": restart_index, "accepted": False, "generation_status": generation.status})
+                break
+            _emit_event(event_callback, stage="loop_control", status="warning", message=f"Similarity below threshold on attempt {restart_index}; restarting full process logic.", payload={"attempt": restart_index, "similarity": score, "accepted": False})
 
-    termination = _build_termination(loop_results, target_similarity, best_score)
-    final_result = best_result or IterationResult(
-        iteration=0,
-        prompt_package=prompt_package,
-        generation=GenerationResult(enabled=False, status="failed_runtime", message="No generation result was produced."),
-    )
+        termination = _build_termination(loop_results, target_similarity, best_score)
+        final_result = best_result or IterationResult(
+            iteration=0,
+            prompt_package=prompt_package,
+            generation=GenerationResult(enabled=False, status="failed_runtime", message="No generation result was produced."),
+        )
+    else:
+        _emit_event(event_callback, stage="generation", status="completed", message="Image generation and similarity comparison were skipped; prompt outputs are ready.", payload={"generation_enabled": False})
+        generation = GenerationResult(enabled=False, status="skipped", message="Image generation setup was not enabled for this run.")
+        final_result = IterationResult(iteration=0, prompt_package=prompt_package, generation=generation, accepted=False)
+        termination = LoopTermination(reason="prompt_only_completed", best_iteration=None, best_score=0.0, threshold_reached=False)
     report = RunReport(
         run_id=run_id,
         run_dir=str(run_dir),
@@ -310,10 +321,18 @@ def run_batch_flow(
     *,
     output_root: Path | None = None,
     project_name: str | None = None,
+    enable_generation: bool | None = None,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[RunReport]:
     return [
-        run_image_flow(path, config, output_root=output_root, project_name=project_name, event_callback=event_callback)
+        run_image_flow(
+            path,
+            config,
+            output_root=output_root,
+            project_name=project_name,
+            enable_generation=enable_generation,
+            event_callback=event_callback,
+        )
         for path in image_paths
     ]
 
@@ -331,7 +350,7 @@ def run_detailed_pipeline(
     target_score: float | None = None,
     max_iterations: int | None = None,
 ) -> RunReport:
-    del iterations, aspect_ratio, enable_generation, enable_comparison
+    del iterations, aspect_ratio, enable_comparison
     return run_image_flow(
         image_path,
         config,
@@ -339,6 +358,7 @@ def run_detailed_pipeline(
         project_name=project_name,
         target_score=target_score,
         max_full_restarts=max_iterations,
+        enable_generation=enable_generation,
     )
 
 
@@ -804,6 +824,13 @@ def _build_termination(iterations: list[IterationResult], target_score: float, b
                 best_score=item.hybrid_score.weighted_score,
                 threshold_reached=True,
             )
+    if all(item.generation.status == "failed_runtime" and item.generation.output_image is None for item in iterations):
+        return LoopTermination(
+            reason="generation_failed",
+            best_iteration=iterations[-1].iteration,
+            best_score=0.0,
+            threshold_reached=False,
+        )
     best_iteration = max(iterations, key=lambda item: item.hybrid_score.weighted_score if item.hybrid_score else 0.0).iteration
     return LoopTermination(
         reason="max_restarts",

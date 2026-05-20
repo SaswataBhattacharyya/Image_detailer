@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_OPENCLAW_ENV="$ROOT_DIR/configs/openclaw_supervisor.local.env"
 export DEBIAN_FRONTEND=noninteractive
 APT_PREFIX=()
 
@@ -123,7 +124,42 @@ setup_qwen_image_backend() {
   fi
 }
 
+choose_reasoning_model() {
+  local explicit="${IMAGE_ANALYZER_REASONING_MODEL:-}"
+  if [[ -n "$explicit" ]]; then
+    printf '%s\n' "$explicit"
+    return
+  fi
+
+  if [[ ! -t 0 ]]; then
+    printf '%s\n' "gemma4:latest"
+    return
+  fi
+
+  echo "[INFO] Choose the OpenClaw reasoning model:"
+  echo "  1) gemma4:latest"
+  echo "  2) hf.co/Jiunsong/supergemma4-26b-uncensored-gguf-v2:Q4_K_M"
+  read -r -p "Enter 1 or 2 [1]: " choice
+  case "${choice:-1}" in
+    2)
+      printf '%s\n' "hf.co/Jiunsong/supergemma4-26b-uncensored-gguf-v2:Q4_K_M"
+      ;;
+    *)
+      printf '%s\n' "gemma4:latest"
+      ;;
+  esac
+}
+
+write_openclaw_local_override() {
+  local reasoning_model="$1"
+  cat >"$LOCAL_OPENCLAW_ENV" <<EOF
+OLLAMA_REASONING_MODEL_DEFAULT="$reasoning_model"
+EOF
+}
+
 main() {
+  local reasoning_model
+
   configure_privilege_mode
   ensure_base_packages
   validate_gpu
@@ -131,14 +167,16 @@ main() {
   install_ollama_if_missing
   ensure_ollama_running
   pull_model_if_missing "qwen2.5vl:7b"
-  pull_model_if_missing "gemma4:latest"
   pull_model_if_missing "qwen2.5-coder:14b"
+  reasoning_model="$(choose_reasoning_model)"
+  pull_model_if_missing "$reasoning_model"
+  write_openclaw_local_override "$reasoning_model"
   install_openclaw_if_missing
-  setup_qwen_image_backend
   chmod +x "$ROOT_DIR"/scripts/*.sh
   log "[INFO] CLI entrypoint: ./scripts/run_image_analyzer.sh"
   log "[INFO] Unified image flow entrypoint: image-analyzer analyze-image <image_path>"
   log "[INFO] Unified batch flow entrypoint: image-analyzer analyze-batch <input_dir>"
+  log "[INFO] Optional image generation setup: ./scripts/setup_image_gen.sh"
   log "[INFO] Streamlit UI entrypoint: ./scripts/run_streamlit_app.sh"
   log "[INFO] Bootstrap complete."
 }

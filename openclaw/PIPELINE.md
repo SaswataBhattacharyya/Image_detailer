@@ -15,7 +15,7 @@ Single canonical flow:
    - `detailed_recreation_text.txt`
    - `concise_generation_prompt.txt`
    - `critical_constraints.txt`
-10. Generate the image through `scripts/run_qwen_image_generation.sh`.
-11. Score similarity with code.
-12. If similarity is below `80%`, restart from step 2.
-13. Stop when similarity is at least `80%` or the restart limit is reached.
+10. If optional image generation is enabled, generate the image through `scripts/run_qwen_image_generation.sh`.
+11. If optional image generation is enabled, score similarity with code.
+12. If optional generation is enabled and similarity is below `80%`, restart from step 2.
+13. If optional generation is disabled, stop after prompt outputs are written.

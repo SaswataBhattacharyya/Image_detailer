@@ -8,6 +8,6 @@ Priorities:
 3. Use auxiliary providers as support signals only.
 4. Prefer measurable statements:
    approximate position, relative size, shape, material, color transitions, and constraints.
-5. Restart the full process if code-based similarity stays below `80%`.
+5. Treat prompt creation as the default successful path. Only enter the generation/restart loop when optional image generation is enabled.
 6. If a model-load or GPU-resource failure appears, mitigate it:
    check active Ollama models, unload competing models, and retry once before reporting failure.

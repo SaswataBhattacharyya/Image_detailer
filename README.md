@@ -4,7 +4,7 @@ Local-first image recreation agent driven by a VLM interrogation loop.
 
 ## Core flow
 
-There is one canonical flow for both single images and batches:
+There is one canonical prompt-generation flow for both single images and batches:
 
 1. Read the reference image.
 2. Run a broad VLM overview.
@@ -13,26 +13,36 @@ There is one canonical flow for both single images and batches:
 5. Ask the next focused VLM question.
 6. Repeat until the image is reconstruction-ready.
 7. Build the final recreation text, concise prompt, and constraints.
-8. Generate an image.
-9. Compute a code-based similarity percentage.
-10. If similarity is below `80%`, restart the full process.
-11. Stop when similarity is at least `80%` or the restart limit is reached.
+8. Optionally generate an image.
+9. Optionally compute a code-based similarity percentage.
+10. If optional generation is enabled and similarity is below `80%`, restart the full process.
+11. Stop when prompt outputs are ready, or when optional generation reaches its stop condition.
 
 Auxiliary modules like YOLO, Florence, OCR, and color extraction are supporting signals only. They do not control the flow.
 
 ## Models pulled by bootstrap
 
-`./scripts/bootstrap_vm.sh` currently pulls these Ollama models:
+`./scripts/bootstrap_vm.sh` currently pulls these prompt-generation models:
 
 - `qwen2.5vl:7b`
 - `qwen2.5-coder:14b`
-- `gemma4:latest`
 
 Repo defaults:
 
 - image interrogation model: `qwen2.5vl:7b`
 - structuring model: `qwen2.5-coder:14b`
-- supervisor/default reasoning model: `qwen2.5-coder:14b`
+- supervisor/default reasoning model: selected during bootstrap
+
+Bootstrap reasoning-model choices:
+
+- `1` = `gemma4:latest`
+- `2` = `hf.co/Jiunsong/supergemma4-26b-uncensored-gguf-v2:Q4_K_M`
+
+Automation-safe override:
+
+```bash
+export IMAGE_ANALYZER_REASONING_MODEL='gemma4:latest'
+```
 
 ## Quick start
 
@@ -40,6 +50,12 @@ Repo defaults:
 chmod +x scripts/*.sh
 ./scripts/bootstrap_vm.sh
 ./scripts/run_streamlit_app.sh
+```
+
+Optional image generation setup:
+
+```bash
+./scripts/setup_image_gen.sh
 ```
 
 CLI:
@@ -59,8 +75,15 @@ image-analyzer analyze-batch /path/to/folder
 - installs Ollama if missing
 - starts Ollama if needed
 - pulls the default Ollama models listed above
+- prompts for the OpenClaw reasoning model unless overridden by env
 - installs OpenClaw if missing
-- runs the Qwen image backend setup helper
+
+`./scripts/setup_image_gen.sh`:
+
+- sets up the optional image generation and comparison backend path
+- validates or reminds you to configure the generator runner
+
+Optional image-generation mode is not enabled by default in config or UI.
 
 Runtime guardrails:
 
@@ -74,6 +97,7 @@ Single image:
 
 ```bash
 image-analyzer analyze-image /path/to/image.png \
+  --enable-generation \
   --target-score 0.80 \
   --max-full-restarts 3 \
   --max-question-rounds 6
@@ -94,13 +118,13 @@ The Streamlit app uses the same unified flow.
 For each image it shows:
 
 - reference image
-- generated image
-- similarity percentage
-- restart count
+- generated image if optional generation is enabled and succeeds
+- similarity percentage if optional generation is enabled and succeeds
 - final prompt
 - scene memory
 - question loop history
 - structured JSON outputs
+- runtime errors directly in the UI
 
 ## Run artifacts
 
@@ -130,8 +154,8 @@ Important files:
 - `outputs/detailed_recreation_text.txt`
 - `outputs/concise_generation_prompt.txt`
 - `outputs/critical_constraints.txt`
-- `generated/generated_v1.png`
-- `comparisons/similarity_v1.json`
+- `generated/generated_v1.png` when generation is enabled
+- `comparisons/similarity_v1.json` when generation is enabled
 - `reports/run_report.json`
 
 ## OpenClaw
@@ -146,10 +170,11 @@ Its main job is:
 - stop only when the image is recreation-ready
 
 It should not treat one caption as sufficient.
+If optional generation is not enabled, prompt creation is still a successful run.
 
 ## Generator backend
 
-Image generation is routed through:
+Optional image generation is routed through:
 
 ```bash
 ./scripts/run_qwen_image_generation.sh
@@ -160,6 +185,7 @@ The wrapper expects a real backend command through:
 - `IMAGE_ANALYZER_QWEN_IMAGE_RUNNER`
 
 If that backend is missing, generation will fail clearly.
+Prompt creation will still work without it.
 
 ## Entry points
 

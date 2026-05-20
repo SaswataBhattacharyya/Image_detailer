@@ -24,7 +24,7 @@ detailed:
   run_root_dir: artifacts/detailed_runs
   default_project_name: image_recreation_agent
   default_aspect_ratio: 3:2
-  enable_generation_by_default: true
+  enable_generation_by_default: false
   target_score: 0.80
   max_full_restarts: 3
   max_question_rounds: 6
