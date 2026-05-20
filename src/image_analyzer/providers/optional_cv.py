@@ -81,15 +81,7 @@ class FlorenceRegionProvider(OptionalProvider):
             )
             image = Image.open(image_path).convert("RGB")
             prompt = "<MORE_DETAILED_CAPTION>"
-            _prepare_florence_generation(model)
-            inputs = processor(text=prompt, images=image, return_tensors="pt")
-            generated = model.generate(
-                input_ids=inputs["input_ids"],
-                pixel_values=inputs["pixel_values"],
-                max_new_tokens=128,
-                num_beams=2,
-                forced_bos_token_id=None,
-            )
+            generated = _run_florence_caption(model, processor, image, prompt)
             text = processor.batch_decode(generated, skip_special_tokens=False)[0]
             parsed = processor.post_process_generation(
                 text,
@@ -102,23 +94,64 @@ class FlorenceRegionProvider(OptionalProvider):
             return ProviderArtifact(provider=self.name, warnings=[f"Florence-2 failed: {exc}"])
 
 
-def _prepare_florence_generation(model: object) -> None:
+def _run_florence_caption(model: object, processor: object, image: object, prompt: str) -> object:
+    _prepare_florence_generation(model)
+    inputs = processor(text=prompt, images=image, return_tensors="pt")
+    try:
+        return model.generate(
+            input_ids=inputs["input_ids"],
+            pixel_values=inputs["pixel_values"],
+            max_new_tokens=128,
+            num_beams=2,
+            forced_bos_token_id=None,
+        )
+    except Exception as exc:
+        if "forced_bos_token_id" not in str(exc):
+            raise
+        _prepare_florence_generation(model, patch_classes=True)
+        return model.generate(
+            input_ids=inputs["input_ids"],
+            pixel_values=inputs["pixel_values"],
+            max_new_tokens=128,
+            num_beams=2,
+            forced_bos_token_id=None,
+        )
+
+
+def _prepare_florence_generation(model: object, *, patch_classes: bool = True) -> None:
     seen_ids: set[int] = set()
-    candidates = [
+    queue = [
         getattr(model, "config", None),
         getattr(model, "generation_config", None),
+        getattr(model, "language_model", None),
         getattr(getattr(model, "language_model", None), "config", None),
         getattr(getattr(model, "language_model", None), "generation_config", None),
     ]
-    for item in candidates:
+    while queue:
+        item = queue.pop(0)
         if item is None or id(item) in seen_ids:
             continue
         seen_ids.add(id(item))
-        if not hasattr(item, "forced_bos_token_id"):
-            try:
-                setattr(item, "forced_bos_token_id", None)
-            except Exception:
-                pass
+        _ensure_forced_bos_token_id(item, patch_class=patch_classes)
+        for attr_name in ("config", "generation_config", "model", "decoder", "language_model"):
+            nested = getattr(item, attr_name, None)
+            if nested is not None and id(nested) not in seen_ids:
+                queue.append(nested)
+
+
+def _ensure_forced_bos_token_id(target: object, *, patch_class: bool) -> None:
+    if not hasattr(target, "forced_bos_token_id"):
+        try:
+            setattr(target, "forced_bos_token_id", None)
+        except Exception:
+            pass
+    if patch_class:
+        try:
+            cls = target.__class__
+            if not hasattr(cls, "forced_bos_token_id"):
+                setattr(cls, "forced_bos_token_id", None)
+        except Exception:
+            pass
 
 
 class TesseractOcrProvider(OptionalProvider):
