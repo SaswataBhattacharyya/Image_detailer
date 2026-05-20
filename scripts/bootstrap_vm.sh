@@ -108,6 +108,12 @@ pull_model_if_missing() {
   if ollama list | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
     return
   fi
+  if [[ "$model" == hf.co/* || "$model" == huggingface.co/* ]]; then
+    # Some Ollama builds/documented HF GGUF paths work more reliably via `run`
+    # than `pull`, which can reject valid hf.co identifiers.
+    OLLAMA_NOHISTORY=1 ollama run "$model" ""
+    return
+  fi
   ollama pull "$model"
 }
 
@@ -136,9 +142,9 @@ choose_reasoning_model() {
     return
   fi
 
-  echo "[INFO] Choose the OpenClaw reasoning model:"
-  echo "  1) gemma4:latest"
-  echo "  2) hf.co/Jiunsong/supergemma4-26b-uncensored-gguf-v2:Q4_K_M"
+  echo "[INFO] Choose the OpenClaw reasoning model:" >&2
+  echo "  1) gemma4:latest" >&2
+  echo "  2) hf.co/Jiunsong/supergemma4-26b-uncensored-gguf-v2:Q4_K_M" >&2
   read -r -p "Enter 1 or 2 [1]: " choice
   case "${choice:-1}" in
     2)
